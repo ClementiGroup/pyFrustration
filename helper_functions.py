@@ -3,26 +3,35 @@ from mutational import ConstructMutationalMPI, ComputePairMPI
 from configurational import ConstructConfigurationalMPI, ComputeConfigMPI, ConstructConfigIndividualMPI, ComputeConfigIndividualMPI
 
 class BookKeeper(object):
-    def __init__(native_file, savedir=None, use_hbonds=False):
+    def __init__(self, native_file, nresidues, savedir=None, use_hbonds=False, relax_native=False, rcutoff=0.6, pcutoff=0.8):
         self.native_file = native_file
         if savedir is None:
             savedir = os.getcwd()
 
         self.savedir = savedir
         self.use_hbonds = use_hbonds
+        self.relax_native = relax_native
+        self.rcutoff = rcutoff
+        self.pcutoff = pcutoff
+        self.nresidues = nresidues
 
         self.decoy_avg = None
         self.decoy_sd = None
-
         self.decoy_list = None
         self.decoy_list_array = None
 
+        self.initialize_rosetta()
         self.prepare_simulations()
 
     def prepare_simulations(self):
         native_file = self.native_file
         savedir = self.savedir
         use_hbonds = self.use_hbonds
+        relax_native = self.relax_native
+        rcutoff = self.rcutoff
+        pcutoff = self.pcutoff
+        nresidues = self.nresidues
+
         comm = MPI.COMM_WORLD
 
         rank = comm.Get_rank()
@@ -209,7 +218,7 @@ def compute_local_frustration(native_file, nresidues=35, savedir=None, mutation=
         np.savetxt("%s/decoy_avg.dat" % savedir, decoy_avg)
         np.savetxt("%s/decoy_sd.dat" % savedir, decoy_sd)
 
-def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, nresidues=35, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None):
+def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None):
     comm = MPI.COMM_WORLD
 
     rank = comm.Get_rank()
@@ -219,6 +228,7 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, nresidues=35, pac
     scorefxn = book_keeper.scorefxn_custom
     order = book_keeper.order
     weights = book_keeper.weights
+    nresidues = book_keeper.nresidues
 
     analysis_object = ConstructMutationalMPI(nresidues, use_contacts=use_contacts, contacts_scores=contacts_scores)
 
@@ -256,7 +266,7 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, nresidues=35, pac
 
     book_keeper.save_results(decoy_avg, decoy_sd)
 
-def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_traj_file, scratch_dir, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, nresidues=35, pcutoff=0.8, native_contacts=None, use_contacts=None, contacts_scores=None, use_config_individual_pairs=False, min_use=10, save_pairs=None):
+def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, pcutoff=0.8, native_contacts=None, use_contacts=None, contacts_scores=None, use_config_individual_pairs=False, min_use=10, save_pairs=None):
     comm = MPI.COMM_WORLD
 
     rank = comm.Get_rank()
@@ -265,6 +275,8 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
     scorefxn = book_keeper.scorefxn_custom
     order = book_keeper.order
     weights = book_keeper.weights
+    scratch_dir = book_keeper.scratch_dir
+    nresidues = book_keeper.nresidues
 
     if rank == 0:
         use_verbose = True
