@@ -87,12 +87,12 @@ def get_possible_residues(pose):
 def determine_close_residues_from_file(native_file, probability_cutoff=0.8, radius_cutoff=0.5):
     traj = md.load(native_file)
 
-    use_pairs, use_pairs_zero, use_score = _determine_close_residues(traj, probability_cutoff=probability_cutoff, radius_cutoff=radius_cutoff)
+    use_pairs, use_pairs_zero, use_score = determine_close_residues(traj, probability_cutoff=probability_cutoff, radius_cutoff=radius_cutoff)
 
     print "In file %s, found %d close residues" % (native_file, np.shape(use_pairs)[0])
     return use_pairs, use_pairs_zero, use_score
 
-def _determine_close_residues(traj, probability_cutoff=0.8, radius_cutoff=0.5):
+def determine_close_residues(traj, probability_cutoff=0.8, radius_cutoff=0.5):
     n_frames = traj.n_frames
     top = traj.top
     collected_pairs = []

@@ -1,4 +1,4 @@
-from util import *
+from .util import *
 
 class ConstructMutationalMPI(object):
     def __init__(self, nresidues, use_contacts=None, contacts_scores=None, verbose=False):

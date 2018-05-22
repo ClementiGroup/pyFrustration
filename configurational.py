@@ -1,4 +1,4 @@
-from util import *
+from .util import *
 
 class ConstructConfigurationalMPI(object):
     def __init__(self, nresidues, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, verbose=False, native_contacts=None):
@@ -125,7 +125,7 @@ class ComputeConfigMPI(object):
         this_traj, this_pose = self.clean_and_return_pose(index)
 
         # get residue (1-indexed) contacts
-        close_contacts, close_contacts_zero, contacts_scores = _determine_close_residues(this_traj, probability_cutoff=self.pcutoff, radius_cutoff=self.rcutoff)
+        close_contacts, close_contacts_zero, contacts_scores = determine_close_residues(this_traj, probability_cutoff=self.pcutoff, radius_cutoff=self.rcutoff)
 
         this_pair_E = compute_pairwise(this_pose, self.scorefxn, self.order, self.weights, use_contacts=close_contacts, nresidues=self.nresidues)
 
@@ -214,7 +214,7 @@ class ComputeConfigIndividualMPI(ComputeConfigMPI):
         this_traj, this_pose = self.clean_and_return_pose(index)
 
         # get residue (1-indexed) contacts
-        close_contacts, close_contacts_zero, contacts_scores = _determine_close_residues(this_traj, probability_cutoff=self.pcutoff, radius_cutoff=self.rcutoff)
+        close_contacts, close_contacts_zero, contacts_scores = determine_close_residues(this_traj, probability_cutoff=self.pcutoff, radius_cutoff=self.rcutoff)
 
         this_pair_E = compute_pairwise(this_pose, self.scorefxn, self.order, self.weights, use_contacts=close_contacts, nresidues=self.nresidues)
 

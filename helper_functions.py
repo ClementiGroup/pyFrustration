@@ -1,6 +1,6 @@
-from util import *
-from mutational import ConstructMutationalMPI, ComputePairMPI
-from configurational import ConstructConfigurationalMPI, ComputeConfigMPI, ConstructConfigIndividualMPI, ComputeConfigIndividualMPI
+from .util import *
+from .mutational import ConstructMutationalMPI, ComputePairMPI
+from .configurational import ConstructConfigurationalMPI, ComputeConfigMPI, ConstructConfigIndividualMPI, ComputeConfigIndividualMPI
 
 class BookKeeper(object):
     def __init__(self, native_file, nresidues, savedir=None, use_hbonds=False, relax_native=False, rcutoff=0.6, pcutoff=0.8):
@@ -264,7 +264,7 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
 
     comm.Barrier()
 
-    book_keeper.save_results(decoy_avg, decoy_sd)
+    book_keeper.save_results(E_avg, E_std)
 
 def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, pcutoff=0.8, native_contacts=None, use_contacts=None, contacts_scores=None, use_config_individual_pairs=False, min_use=10, save_pairs=None):
     comm = MPI.COMM_WORLD
@@ -322,7 +322,7 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
     E_avg, E_std = analysis_object.get_saved_results()
 
     comm.Barrier()
-    book_keeper.save_results(decoy_avg, decoy_sd)
+    book_keeper.save_results(E_avg, E_std)
 
     if not use_config_individual_pairs:
         book_keeper.save_decoy_results(analysis_object.E_list)
