@@ -52,6 +52,8 @@ class ConstructMutationalMPI(object):
 
         count = 0
         print_every = ((self.nresidues) ** 2 ) / 20
+        self.all_e_list = [[[] for i in range(self.nresidues)] for j in range(self.nresidues)]
+
         for results in results_q:
             if self.verbose and (count % print_every == 0):
                 print "Completed %d saves" % count
@@ -66,13 +68,14 @@ class ConstructMutationalMPI(object):
             jdx = results["jdx"] # still 1-indexed
             average = results["average"]
             sd = results["sd"]
+            e_list = results["elist"]
 
             zidx = idx - 1
             zjdx = jdx - 1
 
             self.E_avg[zidx, zjdx] = average
             self.E_sd[zidx, zjdx] = sd
-
+            self.all_e_list[idx-1][jdx-1] = e_list
         if self.verbose:
             print "Completed %d saves" % count
 
@@ -172,23 +175,34 @@ class ComputePairMPI(object):
             new_params = self.pair_list[index]
             idx = new_params["idx"] # 1-indexed
             jdx = new_params["jdx"] # 1-indexed
-            all_E = []
-            for i_decoy in range(self.ndecoys):
+            all_E = np.zeros(self.ndecoys)
+            i_decoy = 0
+            while i_decoy < self.ndecoys:
                 new_pose = self.mutate_residues_and_change(idx, jdx, self.possible_residues)
                 emap = pyrt.EMapVector()
                 self.scorefxn.eval_ci_2b(new_pose.residue(idx), new_pose.residue(jdx), new_pose, emap)
                 this_E = 0.
                 for thing,wt in zip(self.order, self.weights):
                     this_E += emap[thing] * wt
-                all_E.append(this_E)
 
+                if self.remove_high is None:
+                    all_E[i_decoy] = this_E
+                    i_decoy += 1
+                else:
+                    if this_E < self.remove_high:
+                        all_E[i_decoy] = this_E
+                        i_decoy += 1
+            new_E = all_E
+            """
+            # this removes after the fact, but means hundreds of decoys can be missing
             if self.remove_high is not None:
                 temp_E = np.array(all_E)
                 new_E = temp_E[np.where(temp_E < self.remove_high)]
             else:
                 new_E = all_E
+            """
             this_avg, this_std = compute_average_and_sd(new_E)
-            self.save_q.append({"idx":idx, "jdx":jdx, "average":this_avg, "sd":this_std})
+            self.save_q.append({"idx":idx, "jdx":jdx, "average":this_avg, "sd":this_std, "elist":new_E})
             #self.save_q.put([idx, jdx, this_avg, this_std])
 
             self.n_jobs_run += 1

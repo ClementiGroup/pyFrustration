@@ -2,6 +2,16 @@ from .util import *
 from .mutational import ConstructMutationalMPI, ComputePairMPI
 from .configurational import ConstructConfigurationalMPI, ComputeConfigMPI, ConstructConfigIndividualMPI, ComputeConfigIndividualMPI
 
+def _func_gauss(x, mu, sigma, total=1.):
+    if sigma == 0:
+        sigma = 10 ** -16
+    scale = total / math.sqrt(2. * math.pi * (sigma**2))
+    exponent = -1. * ((x - mu)**2) / (2. * (sigma**2))
+
+    results = scale * np.exp(exponent)
+
+    return results
+
 class BookKeeper(object):
     def __init__(self, native_file, nresidues, savedir=None, use_hbonds=False, relax_native=False, rcutoff=0.6, pcutoff=0.8):
         self.native_file = native_file
@@ -138,6 +148,30 @@ class BookKeeper(object):
                 this_E_list = decoy_list_array[pidx][pjdx]
                 np.save("%s/decoy_E_list_%d-%d" % (self.savedir, pidx, pjdx), this_E_list)
 
+    def analyze_all_pairs(self, decoy_list_array, spacing=0.2):
+        if self.rank == 0:
+            chi_array = np.zeros((len(decoy_list_array),len(decoy_list_array)))
+            for idx in range(len(decoy_list_array)):
+                for jdx in range(len(decoy_list_array)):
+                    decoyE = decoy_list_array[idx][jdx]
+                    n_decoys = float(np.shape(decoyE)[0])
+                    if n_decoys > 0:
+                        max_value = ((math.ceil(np.max(np.abs(decoyE)) / spacing)) * spacing) + spacing
+                        ebins = np.arange(-max_value-(0.5*spacing), max_value+spacing, spacing)
+                        avg = np.sum(decoyE) / n_decoys
+                        sd = np.sqrt(np.sum((decoyE - avg)**2 )/n_decoys)
+                        hist_values, bin_edges = np.histogram(decoyE, bins=ebins)
+                        sd_values = np.sqrt(hist_values.astype(float))
+                        center_values = (bin_edges[1:] + bin_edges[:-1]) * 0.5
+                        true_values = _func_gauss(center_values, avg, sd, total=n_decoys*spacing)
+                        chi_pieces = ((hist_values - true_values)**2) / (sd_values ** 2)
+                        chi_pieces[np.where(hist_values==0)] = 0
+                        chi = np.sum(chi_pieces) / float(np.shape(center_values)[0])
+                    else:
+                        chi = 0
+                    chi_array[idx,jdx] = chi
+            np.savetxt("%s/decoy_gaussian_reduced_chi2.dat" % (self.savedir), chi_array)
+
 def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None):
     comm = MPI.COMM_WORLD
 
@@ -167,24 +201,22 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
     # send block
     if rank == 0:
         print "Finished All Calculations"
-        all_results = []
-        all_results.append(new_computer.save_q)
+        analysis_object.process_results_q(new_computer.save_q)
         for i in range(1, size):
             results = comm.recv(source=i, tag=3)
-            all_results.append(results)
+            analysis_object.process_results_q(results)
     else:
         comm.send(new_computer.save_q, dest=0, tag=3)
 
-    # process results block
-    if rank == 0:
-        for results in all_results:
-            analysis_object.process_results_q(results)
-
-    E_avg, E_std = analysis_object.get_saved_results()
-
     comm.Barrier()
+    # get_saved results
+    if rank == 0:
+        E_avg, E_std = analysis_object.get_saved_results()
+        book_keeper.save_results(E_avg, E_std)
 
-    book_keeper.save_results(E_avg, E_std)
+        all_e_list = analysis_object.all_e_list
+        book_keeper.analyze_all_pairs(all_e_list)
+
 
 def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, pcutoff=0.8, native_contacts=None, use_contacts=None, contacts_scores=None, use_config_individual_pairs=False, min_use=10, save_pairs=None):
     comm = MPI.COMM_WORLD
@@ -247,5 +279,6 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
     if not use_config_individual_pairs:
         book_keeper.save_decoy_results(analysis_object.E_list)
     else:
+        book_keeper.analyze_all_pairs(analysis_object.E_list)
         if save_pairs is not None:
             book_keeper.save_specific_pairs(analysis_object.E_list, save_pairs)
