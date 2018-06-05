@@ -12,6 +12,29 @@ def _func_gauss(x, mu, sigma, total=1.):
 
     return results
 
+
+def compute_gaussian_and_chi(decoyE, spacing=0.2):
+
+    n_decoys = float(np.shape(decoyE)[0])
+    if n_decoys > 0:
+        max_value = ((math.ceil(np.max(np.abs(decoyE)) / spacing)) * spacing) + spacing
+        ebins = np.arange(-max_value-(0.5*spacing), max_value+spacing, spacing)
+        avg = np.sum(decoyE) / n_decoys
+        sd = np.sqrt(np.sum((decoyE - avg)**2 )/n_decoys)
+        hist_values, bin_edges = np.histogram(decoyE, bins=ebins)
+        sd_values = np.sqrt(hist_values.astype(float))
+        center_values = (bin_edges[1:] + bin_edges[:-1]) * 0.5
+        true_values = _func_gauss(center_values, avg, sd, total=n_decoys*spacing)
+        chi_pieces = ((hist_values - true_values)**2) / (sd_values ** 2)
+        chi_pieces[np.where(hist_values==0)] = 0
+        chi = np.sum(chi_pieces) / float(np.shape(center_values)[0])
+    else:
+        chi = 0
+        avg = 0
+        sd = 1
+
+    return chi, avg, sd
+
 class BookKeeper(object):
     def __init__(self, native_file, nresidues, savedir=None, use_hbonds=False, relax_native=False, rcutoff=0.6, pcutoff=0.8):
         self.native_file = native_file
@@ -154,21 +177,7 @@ class BookKeeper(object):
             for idx in range(len(decoy_list_array)):
                 for jdx in range(len(decoy_list_array)):
                     decoyE = decoy_list_array[idx][jdx]
-                    n_decoys = float(np.shape(decoyE)[0])
-                    if n_decoys > 0:
-                        max_value = ((math.ceil(np.max(np.abs(decoyE)) / spacing)) * spacing) + spacing
-                        ebins = np.arange(-max_value-(0.5*spacing), max_value+spacing, spacing)
-                        avg = np.sum(decoyE) / n_decoys
-                        sd = np.sqrt(np.sum((decoyE - avg)**2 )/n_decoys)
-                        hist_values, bin_edges = np.histogram(decoyE, bins=ebins)
-                        sd_values = np.sqrt(hist_values.astype(float))
-                        center_values = (bin_edges[1:] + bin_edges[:-1]) * 0.5
-                        true_values = _func_gauss(center_values, avg, sd, total=n_decoys*spacing)
-                        chi_pieces = ((hist_values - true_values)**2) / (sd_values ** 2)
-                        chi_pieces[np.where(hist_values==0)] = 0
-                        chi = np.sum(chi_pieces) / float(np.shape(center_values)[0])
-                    else:
-                        chi = 0
+                    chi, avg, sd = compute_gaussian_and_chi(decoyE)
                     chi_array[idx,jdx] = chi
             np.savetxt("%s/decoy_gaussian_reduced_chi2.dat" % (self.savedir), chi_array)
 
@@ -278,6 +287,10 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
 
     if not use_config_individual_pairs:
         book_keeper.save_decoy_results(analysis_object.E_list)
+        chi, avg, sd = compute_gaussian_and_chi(analysis_object.E_list)
+        f = open("%s/chi2.dat" % (book_keeper.savedir), "w")
+        f.write("%f   %f   %f\n" % (chi, avg, sd))
+        f.close()
     else:
         book_keeper.analyze_all_pairs(analysis_object.E_list)
         if save_pairs is not None:
