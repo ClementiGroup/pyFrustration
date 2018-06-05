@@ -83,7 +83,7 @@ class ConstructMutationalMPI(object):
         return self.E_avg, self.E_sd
 
 class ComputePairMPI(object):
-    def __init__(self, thread_number, pair_list, native_pose, scorefxn, order, weights, ndecoys, pack_radius=10., mutation_scheme="simple", remove_high=None):
+    def __init__(self, thread_number, pair_list, native_pose, scorefxn, order, weights, ndecoys, nresidues, pack_radius=10., mutation_scheme="simple", remove_high=None, compute_all_neighbors=False):
         self.thread_number = thread_number
         print "Thread %d Starting" % self.thread_number
 
@@ -94,6 +94,7 @@ class ComputePairMPI(object):
         self.order = order
         self.weights = weights
         self.ndecoys = ndecoys
+        self.nresidues = nresidues
         self.pack_radius = pack_radius
         self.still_going = True # default action is to keep going
         self.start_time = time.time()
@@ -101,6 +102,7 @@ class ComputePairMPI(object):
         self.possible_residues = get_possible_residues(self.native_pose)
 
         self.remove_high = remove_high
+        self.compute_all_neighbors = compute_all_neighbors
 
         random.seed(int(time.time()) + int(self.thread_number*1000))
 
@@ -161,6 +163,38 @@ class ComputePairMPI(object):
     def print_status(self):
         print "THREAD%2d --- %6f minutes: %6d Pairs Complete" % (self.thread_number, (time.time() - self.start_time)/60., self.n_jobs_run)
 
+    def _determine_single_pair(self, new_pose, idx, jdx):
+        emap = pyrt.EMapVector()
+        self.scorefxn.eval_ci_2b(new_pose.residue(idx), new_pose.residue(jdx), new_pose, emap)
+        this_E = 0.
+        for thing,wt in zip(self.order, self.weights):
+            this_E += emap[thing] * wt
+
+        return this_E
+
+    def _determine_all_pairs(self, new_pose, idx, jdx):
+        this_E = 0. # the total
+        for i_count in range(1, self.nresidues+1):
+            if (i_count != idx) and (i_count != jdx):
+                # compute for idx
+                emap = pyrt.EMapVector()
+                self.scorefxn.eval_ci_2b(new_pose.residue(idx), new_pose.residue(i_count), new_pose, emap)
+                for thing,wt in zip(self.order, self.weights):
+                    this_E += emap[thing] * wt
+
+                # now compute for jdx
+                emap = pyrt.EMapVector()
+                self.scorefxn.eval_ci_2b(new_pose.residue(jdx), new_pose.residue(i_count), new_pose, emap)
+                for thing,wt in zip(self.order, self.weights):
+                    this_E += emap[thing] * wt
+
+        # now compute the idx-jdx pair energy directly.
+        self.scorefxn.eval_ci_2b(new_pose.residue(idx), new_pose.residue(jdx), new_pose, emap)
+        for thing,wt in zip(self.order, self.weights):
+            this_E += emap[thing] * wt
+
+        return this_E
+
     def run(self, list_of_index):
         block_print()
         self.still_going = True
@@ -180,10 +214,10 @@ class ComputePairMPI(object):
             while i_decoy < self.ndecoys:
                 new_pose = self.mutate_residues_and_change(idx, jdx, self.possible_residues)
                 emap = pyrt.EMapVector()
-                self.scorefxn.eval_ci_2b(new_pose.residue(idx), new_pose.residue(jdx), new_pose, emap)
-                this_E = 0.
-                for thing,wt in zip(self.order, self.weights):
-                    this_E += emap[thing] * wt
+                if self.compute_all_neighbors:
+                    this_E = self._determine_all_pairs(new_pose, idx, jdx)
+                else:
+                    this_E = self._determine_single_pair(new_pose, idx, jdx)
 
                 if self.remove_high is None:
                     all_E[i_decoy] = this_E

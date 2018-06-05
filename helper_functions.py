@@ -181,7 +181,7 @@ class BookKeeper(object):
                     chi_array[idx,jdx] = chi
             np.savetxt("%s/decoy_gaussian_reduced_chi2.dat" % (self.savedir), chi_array)
 
-def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None):
+def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None, compute_all_neighbors=False):
     comm = MPI.COMM_WORLD
 
     rank = comm.Get_rank()
@@ -197,7 +197,7 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
 
     analyze_pairs = analysis_object.inputs_collected
     n_analyze = len(analyze_pairs)
-    new_computer = ComputePairMPI(rank, analyze_pairs, pose, scorefxn, order, weights, ndecoys, pack_radius=pack_radius, mutation_scheme=mutation_scheme, remove_high=remove_high)
+    new_computer = ComputePairMPI(rank, analyze_pairs, pose, scorefxn, order, weights, ndecoys, nresidues, pack_radius=pack_radius, mutation_scheme=mutation_scheme, remove_high=remove_high, compute_all_neighbors=compute_all_neighbors)
 
     job_indices = get_mpi_jobs(n_analyze, rank, size)
     new_computer.run(job_indices)
