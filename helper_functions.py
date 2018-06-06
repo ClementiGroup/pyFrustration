@@ -285,13 +285,15 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
     comm.Barrier()
     book_keeper.save_results(E_avg, E_std)
 
-    if not use_config_individual_pairs:
-        book_keeper.save_decoy_results(analysis_object.E_list)
-        chi, avg, sd = compute_gaussian_and_chi(analysis_object.E_list)
-        f = open("%s/chi2.dat" % (book_keeper.savedir), "w")
-        f.write("%f   %f   %f\n" % (chi, avg, sd))
-        f.close()
-    else:
-        book_keeper.analyze_all_pairs(analysis_object.E_list)
-        if save_pairs is not None:
-            book_keeper.save_specific_pairs(analysis_object.E_list, save_pairs)
+
+    if rank == 0:
+        if not use_config_individual_pairs:
+            book_keeper.save_decoy_results(analysis_object.E_list)
+            chi, avg, sd = compute_gaussian_and_chi(analysis_object.E_list)
+            f = open("%s/chi2.dat" % (book_keeper.savedir), "w")
+            f.write("%f   %f   %f\n" % (chi, avg, sd))
+            f.close()
+        else:
+            book_keeper.analyze_all_pairs(analysis_object.E_list)
+            if save_pairs is not None:
+                book_keeper.save_specific_pairs(analysis_object.E_list, save_pairs)
