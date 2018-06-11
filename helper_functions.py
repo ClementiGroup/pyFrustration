@@ -36,7 +36,7 @@ def compute_gaussian_and_chi(decoyE, spacing=0.2):
     return chi, avg, sd
 
 class BookKeeper(object):
-    def __init__(self, native_file, nresidues, savedir=None, use_hbonds=False, relax_native=False, rcutoff=0.6, pcutoff=0.8):
+    def __init__(self, native_file, nresidues, savedir=None, use_hbonds=False, relax_native=False, rcutoff=0.6, pcutoff=0.8, mutate_traj=None, repack_radius=10):
         self.native_file = native_file
         if savedir is None:
             savedir = os.getcwd()
@@ -47,6 +47,9 @@ class BookKeeper(object):
         self.rcutoff = rcutoff
         self.pcutoff = pcutoff
         self.nresidues = nresidues
+
+        self.mutate_traj = mutate_traj
+        self.repack_radius = repack_radius
 
         self.decoy_avg = None
         self.decoy_sd = None
@@ -115,7 +118,22 @@ class BookKeeper(object):
 
         native_pose = pyr.pose_from_pdb(native_file)
 
-        close_contacts, close_contacts_zero, contacts_scores = determine_close_residues_from_file(native_file, probability_cutoff=pcutoff, radius_cutoff=rcutoff)
+        if self.mutate_traj is None:
+            close_contacts, close_contacts_zero, contacts_scores = determine_close_residues_from_file(native_file, probability_cutoff=pcutoff, radius_cutoff=rcutoff)
+        else:
+            dump_file = "%s/mutated_pdb_0.pdb" % (scratch_dir)
+            if rank == 0:
+                for mutation in self.mutate_traj:
+                    mut_idx = mutation[0]
+                    new_res = mutation[1]
+
+                    mutate_residue(native_pose, mut_idx, new_res, pack_radius=self.repack_radius)
+
+                native_pose.dump_pdb(dump_file)
+            self.comm.Barrier()
+            native_pose = pyr.pose_from_pdb(dump_file)
+
+            close_contacts, close_contacts_zero, contacts_scores = determine_close_residues_from_file(dump_file, probability_cutoff=pcutoff, radius_cutoff=rcutoff)
 
         if relax_native:
             relaxer = ClassicRelax()
@@ -181,7 +199,7 @@ class BookKeeper(object):
                     chi_array[idx,jdx] = chi
             np.savetxt("%s/decoy_gaussian_reduced_chi2.dat" % (self.savedir), chi_array)
 
-def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None, compute_all_neighbors=False):
+def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None, compute_all_neighbors=False, save_pairs=None):
     comm = MPI.COMM_WORLD
 
     rank = comm.Get_rank()
@@ -226,8 +244,12 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
         all_e_list = analysis_object.all_e_list
         book_keeper.analyze_all_pairs(all_e_list)
 
+        if save_pairs is not None:
+            for pair in save_pairs:
+                np.savetxt("%s/decoy_E_list_%d-%d.npy" % (book_keeper.savedir, pair[0], pair[1]))
 
-def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, pcutoff=0.8, native_contacts=None, use_contacts=None, contacts_scores=None, use_config_individual_pairs=False, min_use=10, save_pairs=None):
+
+def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, pcutoff=0.8, native_contacts=None, use_contacts=None, contacts_scores=None, use_config_individual_pairs=False, min_use=10, save_pairs=None, mutate_traj_file=None, repack_radius=10):
     comm = MPI.COMM_WORLD
 
     rank = comm.Get_rank()
@@ -239,6 +261,11 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
     scratch_dir = book_keeper.scratch_dir
     nresidues = book_keeper.nresidues
 
+    if mutate_traj_file is None:
+        mutate_traj = None
+    else:
+        mutate_traj = parse_mutations_file(mutate_traj_file)
+
     if rank == 0:
         use_verbose = True
     else:
@@ -246,11 +273,11 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
     if use_config_individual_pairs:
         analysis_object = ConstructConfigIndividualMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, min_use=min_use, verbose=use_verbose)
 
-        new_computer = ComputeConfigIndividualMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, pcutoff=0.8, rcutoff=analysis_object.decoy_r_cutoff)
+        new_computer = ComputeConfigIndividualMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, pcutoff=0.8, rcutoff=analysis_object.decoy_r_cutoff, mutate_traj=mutate_traj, repack_radius=repack_radius)
     else:
         analysis_object = ConstructConfigurationalMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, verbose=use_verbose)
 
-        new_computer = ComputeConfigMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, pcutoff=0.8, rcutoff=analysis_object.decoy_r_cutoff)
+        new_computer = ComputeConfigMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, pcutoff=0.8, rcutoff=analysis_object.decoy_r_cutoff, mutate_traj=mutate_traj, repack_radius=repack_radius)
 
     analyze_indices = analysis_object.inputs_collected
     n_analyze = len(analyze_indices)

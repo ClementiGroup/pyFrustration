@@ -37,6 +37,8 @@ def clean_pdb_files(decoy_dir, file_list):
 def compute_average_and_sd(list_of_params):
     average_params = None
     n_threads = len(list_of_params)
+    if n_threads == 0:
+        print "Invalid number of values, number of values must be > 0"
     collected_params = []
     for mparams in list_of_params:
         if average_params is None:
@@ -143,3 +145,23 @@ def get_mpi_jobs(njobs, rank, size):
     job_numbers = range(rank, njobs, size)
 
     return job_numbers
+
+def parse_mutations_file(file_name):
+    f = open(file_name, "r")
+    mutations_list = []
+    section_parsing = None
+
+    for line in f:
+        stuff = line.strip().split()
+        if section_parsing is None:
+            if stuff[0] == "#mutation":
+                section_parsing = "mutations"
+            elif stuff[0] == "#deletions":
+                section_parsing = "deletions"
+        else:
+            if section_parsing is None:
+                pass
+            elif section_parsing == "mutations":
+                mutations_list.append([int(stuff[0]),stuff[1]])
+
+    return mutations_list

@@ -64,6 +64,9 @@ class ConstructConfigurationalMPI(object):
             count += 1
             self.E_list.append(results)
 
+        if count == 0:
+            print "results_q had no results to save... "
+
         E_avg, E_sd = compute_average_and_sd(self.E_list)
 
         self.assign_E_results(E_avg, E_sd)
@@ -75,7 +78,7 @@ class ConstructConfigurationalMPI(object):
         return self.E_avg, self.E_sd
 
 class ComputeConfigMPI(object):
-    def __init__(self, thread_number, nresidues, traj_file, top_file, scorefxn, order, weights, scratch_dir, pcutoff=0.8, rcutoff=0.5):
+    def __init__(self, thread_number, nresidues, traj_file, top_file, scorefxn, order, weights, scratch_dir, pcutoff=0.8, rcutoff=0.6, mutate_traj=None, repack_radius=10):
         self.thread_number = thread_number
         print "Thread %d Starting" % self.thread_number
 
@@ -95,12 +98,43 @@ class ComputeConfigMPI(object):
         self.start_time = time.time()
         self.n_jobs_run = 0
 
+        self.mutate_traj = mutate_traj
+        self.repack_radius = repack_radius
+
+        if self.mutate_traj is None:
+            self.clean_and_return_pose = self._clean_and_return_simple
+        else:
+            self.clean_and_return_pose = self._clean_and_return_mutate
+
         random.seed(int(time.time()) + int(self.thread_number*1000))
 
     def print_status(self):
         print "THREAD%2d --- %6f minutes: %6d Frames Complete" % (self.thread_number, (time.time() - self.start_time)/60., self.n_jobs_run)
 
-    def clean_and_return_pose(self, index):
+    def _clean_and_return_mutate(self, index):
+        save_pdb_file_initial = "thread_%d.pdb" % (self.thread_number)
+        save_pdb_file_final = "thread_%d_final.pdb" % (self.thread_number)
+        rosetta_pdb_file = "thread_%d.clean.pdb" % (self.thread_number)
+
+        traj_initial = md.load_frame(self.traj_file, index, top=self.top_file)
+        traj_initial.save(save_pdb_file_initial)
+        print "here"
+        cleanATOM(save_pdb_file_initial)
+
+        pose = pyr.pose_from_pdb(rosetta_pdb_file)
+
+        for mutation in self.mutate_traj:
+            mut_idx = mutation[0]
+            new_res = mutation[1]
+
+            mutate_residue(pose, mut_idx, new_res, pack_radius=self.repack_radius)
+
+        pose.dump_pdb(save_pdb_file_final)
+        traj = md.load(save_pdb_file_final)
+
+        return traj, pose
+
+    def _clean_and_return_simple(self, index):
         save_pdb_file = "thread_%d.pdb" % (self.thread_number)
         rosetta_pdb_file = "thread_%d.clean.pdb" % (self.thread_number)
 
@@ -123,7 +157,9 @@ class ComputeConfigMPI(object):
             block_print()
 
         this_traj, this_pose = self.clean_and_return_pose(index)
-
+        #enable_print()
+        #print this_pose.sequence()
+        #block_print()
         # get residue (1-indexed) contacts
         close_contacts, close_contacts_zero, contacts_scores = determine_close_residues(this_traj, probability_cutoff=self.pcutoff, radius_cutoff=self.rcutoff)
 
