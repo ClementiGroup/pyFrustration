@@ -149,19 +149,24 @@ def get_mpi_jobs(njobs, rank, size):
 def parse_mutations_file(file_name):
     f = open(file_name, "r")
     mutations_list = []
+    deletions_list = []
     section_parsing = None
 
     for line in f:
         stuff = line.strip().split()
-        if section_parsing is None:
+        if line[0] == "#":
             if stuff[0] == "#mutation":
                 section_parsing = "mutations"
-            elif stuff[0] == "#deletions":
+            elif stuff[0] == "#deletion":
                 section_parsing = "deletions"
+            else:
+                section_parsing = None
         else:
             if section_parsing is None:
                 pass
             elif section_parsing == "mutations":
-                mutations_list.append([int(stuff[0]),stuff[1]])
+                mutations_list.append([int(stuff[0]), stuff[1]])
+            elif section_parsing == "deletions":
+                deletions_list.append([int(stuff[0]), int(stuff[1])])
 
-    return mutations_list
+    return mutations_list, deletions_list

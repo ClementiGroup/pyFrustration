@@ -78,7 +78,7 @@ class ConstructConfigurationalMPI(object):
         return self.E_avg, self.E_sd
 
 class ComputeConfigMPI(object):
-    def __init__(self, thread_number, nresidues, traj_file, top_file, scorefxn, order, weights, scratch_dir, pcutoff=0.8, rcutoff=0.6, mutate_traj=None, repack_radius=10):
+    def __init__(self, thread_number, nresidues, traj_file, top_file, scorefxn, order, weights, scratch_dir, native_fpose, pcutoff=0.8, rcutoff=0.6):
         self.thread_number = thread_number
         print "Thread %d Starting" % self.thread_number
 
@@ -93,20 +93,25 @@ class ComputeConfigMPI(object):
         self.pcutoff = pcutoff
         self.rcutoff = rcutoff
         self.scratch_dir = scratch_dir
+        self.native_fpose = native_fpose
 
         self.still_going = True # default action is to keep going
         self.start_time = time.time()
         self.n_jobs_run = 0
 
-        self.mutate_traj = mutate_traj
-        self.repack_radius = repack_radius
+        self.mutate_traj = (native_fpose.deletion_ranges is not None) or (native_fpose.mutation_list is not None)
+        print self.mutate_traj
 
-        if self.mutate_traj is None:
-            self.clean_and_return_pose = self._clean_and_return_simple
-        else:
+        if self.mutate_traj:
             self.clean_and_return_pose = self._clean_and_return_mutate
+        else:
+            self.clean_and_return_pose = self._clean_and_return_simple
 
         random.seed(int(time.time()) + int(self.thread_number*1000))
+
+        print self.native_fpose.pose.sequence()
+        print self.native_fpose.deletion_ranges
+        print self.native_fpose.mutation_list
 
     def print_status(self):
         print "THREAD%2d --- %6f minutes: %6d Frames Complete" % (self.thread_number, (time.time() - self.start_time)/60., self.n_jobs_run)
@@ -118,20 +123,13 @@ class ComputeConfigMPI(object):
 
         traj_initial = md.load_frame(self.traj_file, index, top=self.top_file)
         traj_initial.save(save_pdb_file_initial)
-        print "here"
+        #print "here"
         cleanATOM(save_pdb_file_initial)
 
         pose = pyr.pose_from_pdb(rosetta_pdb_file)
-
-        for mutation in self.mutate_traj:
-            mut_idx = mutation[0]
-            new_res = mutation[1]
-
-            mutate_residue(pose, mut_idx, new_res, pack_radius=self.repack_radius)
-
-        pose.dump_pdb(save_pdb_file_final)
+        new_fpose = self.native_fpose.duplicate_changes_new_pose(pose)
+        new_fpose.dump_to_pdb(save_pdb_file_final)
         traj = md.load(save_pdb_file_final)
-
         return traj, pose
 
     def _clean_and_return_simple(self, index):
