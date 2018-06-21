@@ -126,7 +126,9 @@ class BookKeeper(object):
         else:
             print "Mutating the structure"
             dump_file = "%s/mutated_pdb_0.pdb" % (scratch_dir)
-            if rank == 0:
+            #if rank == 0:
+            # this is a hack. Need to write a method for adding a mutate_traj and a delete_traj list manually.
+            if True:
                 native_fpose.modify_protein(mutation_list=self.mutate_traj, deletion_ranges=self.delete_traj)
                 native_fpose.dump_to_pdb(dump_file)
             self.comm.Barrier()
@@ -190,6 +192,10 @@ class BookKeeper(object):
         self.decoy_avg = decoy_avg
         self.decoy_sd = decoy_sd
         true_size = self.native_fpose.old_nresidues
+        self.comm.Barrier()
+        print "true size for thread %d: %d" % (self.rank, true_size)
+        print ""
+        self.comm.Barrier()
         if self.rank == 0:
             np.savetxt("%s/native_pairwise.dat" % self.savedir, self.remap_pairE(self.native_pair_E, true_size))
             np.savetxt("%s/decoy_avg.dat" % self.savedir, self.remap_pairE(decoy_avg, true_size))
