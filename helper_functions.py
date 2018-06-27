@@ -275,7 +275,7 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
                 np.savetxt("%s/decoy_E_list_%d-%d.npy" % (book_keeper.savedir, pair[0], pair[1]))
 
 
-def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, pcutoff=0.8, native_contacts=None, use_contacts=None, contacts_scores=None, use_config_individual_pairs=False, min_use=10, save_pairs=None):
+def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, pcutoff=0.8, native_contacts=None, use_contacts=None, contacts_scores=None, use_config_individual_pairs=False, min_use=10, save_pairs=None, remove_high=None, count_all_similar=False):
     comm = MPI.COMM_WORLD
 
     rank = comm.Get_rank()
@@ -293,11 +293,11 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
     else:
         use_verbose = False
     if use_config_individual_pairs:
-        analysis_object = ConstructConfigIndividualMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, min_use=min_use, verbose=use_verbose)
+        analysis_object = ConstructConfigIndividualMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, min_use=min_use, verbose=use_verbose, remove_high=remove_high)
 
         new_computer = ComputeConfigIndividualMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, native_fpose, pcutoff=0.8, rcutoff=analysis_object.decoy_r_cutoff)
     else:
-        analysis_object = ConstructConfigurationalMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, verbose=use_verbose)
+        analysis_object = ConstructConfigurationalMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, verbose=use_verbose, remove_high=remove_high, count_all_similar=count_all_similar)
 
         new_computer = ComputeConfigMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, native_fpose, pcutoff=0.8, rcutoff=analysis_object.decoy_r_cutoff)
 

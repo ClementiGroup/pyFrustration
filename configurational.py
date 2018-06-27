@@ -1,7 +1,7 @@
 from .util import *
 
 class ConstructConfigurationalMPI(object):
-    def __init__(self, nresidues, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, verbose=False, native_contacts=None):
+    def __init__(self, nresidues, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, verbose=False, native_contacts=None, remove_high=False):
         self.verbose = verbose
         self.nresidues = nresidues
 
@@ -10,6 +10,7 @@ class ConstructConfigurationalMPI(object):
         self.configurational_dtraj = configurational_dtraj
         self.configurational_parameters = configurational_parameters
         self.native_contacts = native_contacts
+        self.remove_high = remove_high
         self.decoy_r_cutoff = configurational_parameters["decoy_r_cutoff"]
 
         self._convert_parameters_into_list()
@@ -61,8 +62,13 @@ class ConstructConfigurationalMPI(object):
         # for configurational, anticipate a list of pair energies
         count = 0
         for results in results_q:
-            count += 1
-            self.E_list.append(results)
+            if self.remove_high is None:
+                count += 1
+                self.E_list.append(results)
+            else:
+                if results < self.remove_high:
+                    count += 1
+                    self.E_list.append(results)
 
         if count == 0:
             print "results_q had no results to save... "
@@ -177,7 +183,7 @@ class ComputeConfigMPI(object):
 
 class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
     def __init__(self, *args, **kwargs):
-        specific_args = ["min_use"]
+        specific_args = ["min_use", "count_all_similar"]
         new_kwargs = {}
         for thing in kwargs:
             if thing in specific_args:
@@ -191,6 +197,11 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
         else:
             self.min_use = 0
 
+        if "count_all_similar" in kwargs:
+            self.count_all_similar = kwargs["count_all_similar"]
+        else:
+            self.count_all_similar = False
+
 
     def _initialize_empty_results(self):
         self.E_list = [[[] for i in range(self.nresidues)] for j in range(self.nresidues)]
@@ -201,17 +212,39 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
         self.E_avg[idx, jdx] = avg
         self.E_sd[idx, jdx] = std
 
+    def append_all_similar(self, idx, jdx, E):
+        total_counts = 0
+        for i in range(self.nresidues):
+            if i != idx and i != jdx:
+                self.E_list[i][jdx].append(E)
+                self.E_list[jdx][i].append(E)
+                self.E_list[i][idx].append(E)
+                self.E_list[idx][i].append(E)
+                total_counts += 4
+
+        assert total_counts == (self.nresidues * 4) - 4
+
     def process_results_q(self, results_q):
         # take a queue as input, and then analyze the results
         # for configurational, anticipate a list of pair energies
         count = 0
         for results in results_q:
-            count += 1
             idx = results["idx"]
             jdx = results["jdx"]
             E = results["E"]
-            self.E_list[idx][jdx].append(E)
-            self.E_list[jdx][idx].append(E)
+            if self.remove_high is None:
+                count += 1
+                self.E_list[idx][jdx].append(E)
+                self.E_list[jdx][idx].append(E)
+                if self.count_all_similar:
+                    self.append_all_similar(idx, jdx, E)
+            else:
+                if results < self.remove_high:
+                    count += 1
+                    self.E_list[idx][jdx].append(E)
+                    self.E_list[jdx][idx].append(E)
+                    if self.count_all_similar:
+                        self.append_all_similar(idx, jdx, E)
 
         zero_count = 0
         found_count = 0
