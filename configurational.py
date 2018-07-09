@@ -222,7 +222,11 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
                 self.E_list[idx][i].append(E)
                 total_counts += 4
 
-        assert total_counts == (self.nresidues * 4) - 4
+        try:
+            assert total_counts == ((self.nresidues * 4) - 8)
+        except:
+            print "Total Counts is %d, expected %d" % (total_counts, ((self.nresidues*4)-8))
+            raise
 
     def process_results_q(self, results_q):
         # take a queue as input, and then analyze the results
@@ -239,7 +243,7 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
                 if self.count_all_similar:
                     self.append_all_similar(idx, jdx, E)
             else:
-                if results < self.remove_high:
+                if E < self.remove_high:
                     count += 1
                     self.E_list[idx][jdx].append(E)
                     self.E_list[jdx][idx].append(E)

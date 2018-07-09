@@ -79,6 +79,43 @@ def compute_pairwise(pose, scorefxn, order, weights, nresidues=35, use_contacts=
 
     return pair_E
 
+def compute_pairwise_allinteractions(pose, scorefxn, order, weights, nresidues=35, use_contacts=None):
+    total_E = scorefxn(pose)
+    pair_E = np.zeros((nresidues,nresidues))
+    if use_contacts is None:
+        these_contacts = []
+        for idx in range(1, nresidues+1):
+            for jdx in range(idx+1, nresidues+1):
+                these_contacts.append([idx, jdx])
+    else:
+        these_contacts = use_contacts
+
+    for contact in these_contacts:
+        idx = contact[0]
+        jdx = contact[1]
+        this_E = 0.
+        for i_count in range(1, nresidues+1):
+            if (i_count != idx) and (i_count != jdx):
+                emap = pyrt.EMapVector()
+                scorefxn.eval_ci_2b(pose.residue(idx), pose.residue(i_count), pose, emap)
+                for thing,wt in zip(order,weights):
+                    this_E += emap[thing] * wt
+
+                emap = pyrt.EMapVector()
+                scorefxn.eval_ci_2b(pose.residue(jdx), pose.residue(i_count), pose, emap)
+                for thing,wt in zip(order,weights):
+                    this_E += emap[thing] * wt
+
+        emap = pyrt.EMapVector()
+        scorefxn.eval_ci_2b(pose.residue(idx), pose.residue(jdx), pose, emap)
+        for thing,wt in zip(order,weights):
+            this_E += emap[thing] * wt
+
+        pair_E[idx-1, jdx-1] = this_E
+    #assert (total_E - np.sum(pair_E)) < 0.01
+
+    return pair_E
+
 def get_possible_residues(pose):
     all_residues = ["G", "A", "V", "L", "I", "M", "F", "W", "P", "S", "T", "C", "Y", "N", "Q", "D", "E", "K", "R", "H"]
     sequence = pose.sequence()

@@ -37,7 +37,7 @@ def compute_gaussian_and_chi(decoyE, spacing=0.2):
     return chi, avg, sd
 
 class BookKeeper(object):
-    def __init__(self, native_file, nresidues, savedir=None, use_hbonds=False, relax_native=False, rcutoff=0.6, pcutoff=0.8, mutate_traj=None, delete_traj=None, repack_radius=10):
+    def __init__(self, native_file, nresidues, savedir=None, use_hbonds=False, relax_native=False, rcutoff=0.6, pcutoff=0.8, mutate_traj=None, delete_traj=None, repack_radius=10, compute_all_neighbors=False):
         self.native_file = native_file
         if savedir is None:
             savedir = os.getcwd()
@@ -52,6 +52,7 @@ class BookKeeper(object):
         self.mutate_traj = mutate_traj
         self.delete_traj = delete_traj
         self.repack_radius = repack_radius
+        self.compute_all_neighbors = compute_all_neighbors
 
         self.decoy_avg = None
         self.decoy_sd = None
@@ -148,7 +149,10 @@ class BookKeeper(object):
             native_pose = pyr.pose_from_pdb(dump_relaxed_file)
             native_fpose = native_fpose.duplicate_nochange_new_pose(native_pose)
 
-        native_pair_E = compute_pairwise(native_pose, scorefxn_custom, order, weights, use_contacts=close_contacts, nresidues=native_fpose.nresidues) # account for deletions
+        if self.compute_all_neighbors:
+            native_pair_E = compute_pairwise_allinteractions(native_pose, scorefxn_custom, order, weights, use_contacts=close_contacts, nresidues=native_fpose.nresidues) # account for deletions
+        else:
+            native_pair_E = compute_pairwise(native_pose, scorefxn_custom, order, weights, use_contacts=close_contacts, nresidues=native_fpose.nresidues) # account for deletions
 
         self.native_pose = native_pose
         self.native_fpose = native_fpose
@@ -192,10 +196,7 @@ class BookKeeper(object):
         self.decoy_avg = decoy_avg
         self.decoy_sd = decoy_sd
         true_size = self.native_fpose.old_nresidues
-        self.comm.Barrier()
-        print "true size for thread %d: %d" % (self.rank, true_size)
-        print ""
-        self.comm.Barrier()
+
         if self.rank == 0:
             np.savetxt("%s/native_pairwise.dat" % self.savedir, self.remap_pairE(self.native_pair_E, true_size))
             np.savetxt("%s/decoy_avg.dat" % self.savedir, self.remap_pairE(decoy_avg, true_size))
@@ -218,12 +219,15 @@ class BookKeeper(object):
     def analyze_all_pairs(self, decoy_list_array, spacing=0.2):
         if self.rank == 0:
             chi_array = np.zeros((len(decoy_list_array),len(decoy_list_array)))
+            count_array = np.zeros((len(decoy_list_array),len(decoy_list_array)))
             for idx in range(len(decoy_list_array)):
                 for jdx in range(len(decoy_list_array)):
                     decoyE = decoy_list_array[idx][jdx]
+                    count_array[idx,jdx] = np.shape(decoyE)[0]
                     chi, avg, sd = compute_gaussian_and_chi(decoyE)
                     chi_array[idx,jdx] = chi
             np.savetxt("%s/decoy_gaussian_reduced_chi2.dat" % (self.savedir), chi_array)
+            np.savetxt("%s/decoy_gaussian_counts.dat" % (self.savedir), count_array)
 
 def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None, compute_all_neighbors=False, save_pairs=None):
     comm = MPI.COMM_WORLD
@@ -258,12 +262,14 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
         for i in range(1, size):
             results = comm.recv(source=i, tag=3)
             analysis_object.process_results_q(results)
+        print "Finished Saving all results"
     else:
         comm.send(new_computer.save_q, dest=0, tag=3)
 
     comm.Barrier()
-    # get_saved results
+
     if rank == 0:
+        # get_saved results
         E_avg, E_std = analysis_object.get_saved_results()
         book_keeper.save_results(E_avg, E_std)
 
@@ -272,8 +278,9 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
 
         if save_pairs is not None:
             for pair in save_pairs:
-                np.savetxt("%s/decoy_E_list_%d-%d.npy" % (book_keeper.savedir, pair[0], pair[1]))
+                np.savetxt("%s/decoy_E_list_%d-%d.npy" % (book_keeper.savedir, pair[0], pair[1]), all_e_list[pair[0]-1][pair[1]-1])
 
+        print "THE END"
 
 def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, pcutoff=0.8, native_contacts=None, use_contacts=None, contacts_scores=None, use_config_individual_pairs=False, min_use=10, save_pairs=None, remove_high=None, count_all_similar=False):
     comm = MPI.COMM_WORLD
@@ -293,11 +300,11 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
     else:
         use_verbose = False
     if use_config_individual_pairs:
-        analysis_object = ConstructConfigIndividualMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, min_use=min_use, verbose=use_verbose, remove_high=remove_high)
+        analysis_object = ConstructConfigIndividualMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, min_use=min_use, verbose=use_verbose, remove_high=remove_high, count_all_similar=count_all_similar)
 
         new_computer = ComputeConfigIndividualMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, native_fpose, pcutoff=0.8, rcutoff=analysis_object.decoy_r_cutoff)
     else:
-        analysis_object = ConstructConfigurationalMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, verbose=use_verbose, remove_high=remove_high, count_all_similar=count_all_similar)
+        analysis_object = ConstructConfigurationalMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, verbose=use_verbose, remove_high=remove_high)
 
         new_computer = ComputeConfigMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, native_fpose, pcutoff=0.8, rcutoff=analysis_object.decoy_r_cutoff)
 
