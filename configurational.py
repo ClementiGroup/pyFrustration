@@ -92,7 +92,6 @@ class ComputeConfigMPI(object):
         self.traj_file = traj_file
         self.top_file = top_file
 
-        self.save_q = [] # list of pairwise energies
         self.scorefxn = scorefxn
         self.order = order
         self.weights = weights
@@ -104,6 +103,7 @@ class ComputeConfigMPI(object):
         self.still_going = True # default action is to keep going
         self.start_time = time.time()
         self.n_jobs_run = 0
+        self._initialize_saveq()
 
         self.mutate_traj = (native_fpose.deletion_ranges is not None) or (native_fpose.mutation_list is not None)
         print self.mutate_traj
@@ -118,6 +118,9 @@ class ComputeConfigMPI(object):
         print self.native_fpose.pose.sequence()
         print self.native_fpose.deletion_ranges
         print self.native_fpose.mutation_list
+
+    def _initialize_saveq(self):
+        self.save_q = np.empty((0,))
 
     def print_status(self):
         print "THREAD%2d --- %6f minutes: %6d Frames Complete" % (self.thread_number, (time.time() - self.start_time)/60., self.n_jobs_run)
@@ -172,7 +175,8 @@ class ComputeConfigMPI(object):
         for contact_index in close_contacts_zero:
             idx = contact_index[0] #use the 0-indexed
             jdx = contact_index[1] #use the 0-indexed
-            self.save_q.append(this_pair_E[idx, jdx] )
+            #self.save_q.append(this_pair_E[idx, jdx] )
+            self.save_q = np.append(self.save_q, this_pair_E[idx, jdx])
 
         self.still_going = False
         enable_print()
@@ -204,7 +208,7 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
 
 
     def _initialize_empty_results(self):
-        self.E_list = [[[] for i in range(self.nresidues)] for j in range(self.nresidues)]
+        self.E_list = [[np.empty(0) for i in range(self.nresidues)] for j in range(self.nresidues)]
         self.E_avg = np.zeros((self.nresidues, self.nresidues))
         self.E_sd = np.zeros((self.nresidues, self.nresidues))
 
@@ -216,10 +220,10 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
         total_counts = 0
         for i in range(self.nresidues):
             if i != idx and i != jdx:
-                self.E_list[i][jdx].append(E)
-                self.E_list[jdx][i].append(E)
-                self.E_list[i][idx].append(E)
-                self.E_list[idx][i].append(E)
+                self.E_list[i][jdx] = np.append(self.E_list[i][jdx], E)
+                self.E_list[jdx][i] = np.append(self.E_list[jdx][i], E)
+                self.E_list[i][idx] = np.append(self.E_list[i][idx], E)
+                self.E_list[idx][i] = np.append(self.E_list[idx][i], E)
                 total_counts += 4
 
         try:
@@ -232,23 +236,20 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
         # take a queue as input, and then analyze the results
         # for configurational, anticipate a list of pair energies
         count = 0
-        for results in results_q:
-            idx = results["idx"]
-            jdx = results["jdx"]
-            E = results["E"]
-            if self.remove_high is None:
+        n_results = np.shape(results_q)[0]
+        #print np.shape(results_q)
+        for idx_result in range(n_results):
+            results = results_q[idx_result,:]
+            idx = int(results[0])
+            jdx = int(results[1])
+            E = results[2]
+            if (self.remove_high is None) or (E < self.remove_high):
+                # either append all, or only if E is less than remove_high
                 count += 1
-                self.E_list[idx][jdx].append(E)
-                self.E_list[jdx][idx].append(E)
+                self.E_list[idx][jdx] = np.append(self.E_list[idx][jdx], E)
+                self.E_list[jdx][idx] = np.append(self.E_list[jdx][idx], E)
                 if self.count_all_similar:
                     self.append_all_similar(idx, jdx, E)
-            else:
-                if E < self.remove_high:
-                    count += 1
-                    self.E_list[idx][jdx].append(E)
-                    self.E_list[jdx][idx].append(E)
-                    if self.count_all_similar:
-                        self.append_all_similar(idx, jdx, E)
 
         zero_count = 0
         found_count = 0
@@ -257,11 +258,11 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
             for jdx in range(self.nresidues):
                 found_count += 1
                 this_list = self.E_list[idx][jdx]
-                if len(this_list) == 0:
+                if np.shape(this_list)[0] == 0:
                     E_avg = 0
                     E_sd = 0
                     zero_count += 1
-                elif len(this_list) < self.min_use:
+                elif np.shape(this_list)[0] < self.min_use:
                     E_avg = 0
                     E_sd = 0
                     min_count += 1
@@ -273,6 +274,10 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
             print "Completed %d saves, %f of the pairs had zero count while %f of the pairs had non-zero counts but were below the minimum threshold of %d" % (count, float(zero_count)/float(found_count), float(min_count)/float(found_count), self.min_use)
 
 class ComputeConfigIndividualMPI(ComputeConfigMPI):
+
+    def _initialize_saveq(self):
+        self.save_q = np.empty((0,3))
+
     def run(self, index):
         block_print()
         self.still_going = True
@@ -292,8 +297,10 @@ class ComputeConfigIndividualMPI(ComputeConfigMPI):
         for contact_index in close_contacts_zero:
             idx = contact_index[0] #use the 0-indexed
             jdx = contact_index[1] #use the 0-indexed
-            save_dict = {"idx":idx, "jdx":jdx, "E": this_pair_E[idx,jdx]}
-            self.save_q.append(save_dict)
+            #save_dict = {"idx":idx, "jdx":jdx, "E": this_pair_E[idx,jdx]}
+            #self.save_q.append(save_dict)
+            save_dict = [idx, jdx, this_pair_E[idx,jdx]]
+            self.save_q = np.append(self.save_q, [save_dict], axis=0)
 
         self.still_going = False
         enable_print()
