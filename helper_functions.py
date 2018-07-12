@@ -229,6 +229,8 @@ class BookKeeper(object):
             np.savetxt("%s/decoy_gaussian_reduced_chi2.dat" % (self.savedir), chi_array)
             np.savetxt("%s/decoy_gaussian_counts.dat" % (self.savedir), count_array)
 
+    
+
 def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None, compute_all_neighbors=False, save_pairs=None):
     comm = MPI.COMM_WORLD
 
@@ -327,10 +329,12 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
     # send AND process results block
     if rank == 0:
         print "Finished All Calculations"
+        t1 = time.time()
         analysis_object.process_results_q(new_computer.save_q)
         for i in range(1, size):
             results = comm.recv(source=i, tag=3)
             analysis_object.process_results_q(results)
+            print "Currently been %f minutes" % ((time.time() - t1) / 60.)
     else:
         comm.send(new_computer.save_q, dest=0, tag=3)
 

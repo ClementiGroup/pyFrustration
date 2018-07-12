@@ -206,15 +206,29 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
         else:
             self.count_all_similar = False
 
+        self.was_updated = False
+
+    @property
+    def E_avg(self):
+        if self.was_updated:
+            self._save_compute_results()
+        return self._E_avg
+
+    @property
+    def E_sd(self):
+        if self.was_updated:
+            self._save_compute_results()
+
+        return self._E_sd
 
     def _initialize_empty_results(self):
         self.E_list = [[np.empty(0) for i in range(self.nresidues)] for j in range(self.nresidues)]
-        self.E_avg = np.zeros((self.nresidues, self.nresidues))
-        self.E_sd = np.zeros((self.nresidues, self.nresidues))
+        self._E_avg = np.zeros((self.nresidues, self.nresidues))
+        self._E_sd = np.zeros((self.nresidues, self.nresidues))
 
     def assign_E_results(self, idx, jdx, avg, std):
-        self.E_avg[idx, jdx] = avg
-        self.E_sd[idx, jdx] = std
+        self._E_avg[idx, jdx] = avg
+        self._E_sd[idx, jdx] = std
 
     def append_all_similar(self, idx, jdx, E):
         total_counts = 0
@@ -235,6 +249,7 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
     def process_results_q(self, results_q):
         # take a queue as input, and then analyze the results
         # for configurational, anticipate a list of pair energies
+        self.was_updated = True
         count = 0
         n_results = np.shape(results_q)[0]
         #print np.shape(results_q)
@@ -251,6 +266,9 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
                 if self.count_all_similar:
                     self.append_all_similar(idx, jdx, E)
 
+        print "%d pairs were saved" % (count)
+
+    def _save_compute_results(self):
         zero_count = 0
         found_count = 0
         min_count = 0
@@ -270,8 +288,9 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
                     E_avg, E_sd = compute_average_and_sd(self.E_list[idx][jdx])
                 self.assign_E_results(idx, jdx, E_avg, E_sd)
 
+        self.was_updated = False
         if self.verbose:
-            print "Completed %d saves, %f of the pairs had zero count while %f of the pairs had non-zero counts but were below the minimum threshold of %d" % (count, float(zero_count)/float(found_count), float(min_count)/float(found_count), self.min_use)
+            print "%f of the pairs had zero count while %f of the pairs had non-zero counts but were below the minimum threshold of %d" % (float(zero_count)/float(found_count), float(min_count)/float(found_count), self.min_use)
 
 class ComputeConfigIndividualMPI(ComputeConfigMPI):
 
