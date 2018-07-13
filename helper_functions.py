@@ -229,7 +229,35 @@ class BookKeeper(object):
             np.savetxt("%s/decoy_gaussian_reduced_chi2.dat" % (self.savedir), chi_array)
             np.savetxt("%s/decoy_gaussian_counts.dat" % (self.savedir), count_array)
 
-    
+class BookKeeperSingleResidue(BookKeeper):
+    pass
+
+    def prepare_simulations(self):
+        super(BookKeeperSingleResidue, self).prepare_simulations()
+
+        self.single_residue_energy = np.sum(native_pair_E, axis=0)
+
+    def remap_pairE(self, data, size):
+        # re-map the final matrix to new dimensions
+        new_pair_E = np.zeros((size))
+        for i in range(np.shape(data)[0]):
+            idx = self.native_fpose.current_indices[i]
+            value = data[i]
+
+            new_pair_E[idx] = value
+
+        return new_pair_E
+
+    def save_results(self, decoy_avg, decoy_sd):
+        self.decoy_avg = decoy_avg
+        self.decoy_sd = decoy_sd
+        true_size = self.native_fpose.old_nresidues
+
+        if self.rank == 0:
+            np.savetxt("%s/native_singleresidue.dat" % self.savedir, self.remap_pairE(self.single_residue_energy, true_size))
+            np.savetxt("%s/decoy_avg.dat" % self.savedir, self.remap_pairE(decoy_avg, true_size))
+            np.savetxt("%s/decoy_sd.dat" % self.savedir, self.remap_pairE(decoy_sd, true_size))
+
 
 def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None, compute_all_neighbors=False, save_pairs=None):
     comm = MPI.COMM_WORLD
@@ -331,10 +359,12 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
         print "Finished All Calculations"
         t1 = time.time()
         analysis_object.process_results_q(new_computer.save_q)
+        print "Currently been %f minutes to process the data" % ((time.time() - t1) / 60.)
         for i in range(1, size):
             results = comm.recv(source=i, tag=3)
+            print "Currently been %f minutes to transfer the data" % ((time.time() - t1) / 60.)
             analysis_object.process_results_q(results)
-            print "Currently been %f minutes" % ((time.time() - t1) / 60.)
+            print "Currently been %f minutes to process the data" % ((time.time() - t1) / 60.)
     else:
         comm.send(new_computer.save_q, dest=0, tag=3)
 

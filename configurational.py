@@ -250,21 +250,19 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
         # take a queue as input, and then analyze the results
         # for configurational, anticipate a list of pair energies
         self.was_updated = True
-        count = 0
-        n_results = np.shape(results_q)[0]
-        #print np.shape(results_q)
-        for idx_result in range(n_results):
-            results = results_q[idx_result,:]
-            idx = int(results[0])
-            jdx = int(results[1])
-            E = results[2]
-            if (self.remove_high is None) or (E < self.remove_high):
-                # either append all, or only if E is less than remove_high
-                count += 1
-                self.E_list[idx][jdx] = np.append(self.E_list[idx][jdx], E)
-                self.E_list[jdx][idx] = np.append(self.E_list[jdx][idx], E)
+        for i_parse in range(self.nresidues):
+            for j_parse in range(self.nresidues):
+                this_array = self.E_list[i_parse][j_parse]
+                if self.remove_high is None:
+                    this_new = results_q[i_parse][j_parse]
+                else:
+                    this_new_nocutoff = results_q[i_parse][j_parse]
+                    this_new_idxs = np.where(this_new_nocutoff < self.remove_high)
+                    this_new = this_new_nocutoff[this_new_idxs]
+                self.E_list[i_parse][j_parse] = np.append(this_array, this_new)
                 if self.count_all_similar:
-                    self.append_all_similar(idx, jdx, E)
+                    self.append_all_similar(i_parse, j_parse, this_new)
+                count += np.shape(this_new)[0]
 
         print "%d pairs were saved" % (count)
 
@@ -295,7 +293,7 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
 class ComputeConfigIndividualMPI(ComputeConfigMPI):
 
     def _initialize_saveq(self):
-        self.save_q = np.empty((0,3))
+        self.save_q = [[np.empty(0) for i in range(self.nresidues)] for j in range(self.nresidues)]
 
     def run(self, index):
         block_print()
@@ -318,8 +316,7 @@ class ComputeConfigIndividualMPI(ComputeConfigMPI):
             jdx = contact_index[1] #use the 0-indexed
             #save_dict = {"idx":idx, "jdx":jdx, "E": this_pair_E[idx,jdx]}
             #self.save_q.append(save_dict)
-            save_dict = [idx, jdx, this_pair_E[idx,jdx]]
-            self.save_q = np.append(self.save_q, [save_dict], axis=0)
+            self.save_q[idx][jdx] = np.append(self.save_q[idx][jdx], this_pair_E[idx,jdx])
 
         self.still_going = False
         enable_print()
