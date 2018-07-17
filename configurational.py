@@ -254,13 +254,13 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
         for i_parse in range(self.nresidues):
             for j_parse in range(i_parse+1, self.nresidues):
                 this_array = self.E_list[i_parse][j_parse]
-                if np.shape(this_array)[0] > 0:
-                    if self.remove_high is None:
-                        this_new = results_q[i_parse][j_parse]
-                    else:
-                        this_new_nocutoff = results_q[i_parse][j_parse]
-                        this_new_idxs = np.where(this_new_nocutoff < self.remove_high)
-                        this_new = this_new_nocutoff[this_new_idxs]
+                if self.remove_high is None:
+                    this_new = results_q[i_parse][j_parse]
+                else:
+                    this_new_nocutoff = results_q[i_parse][j_parse]
+                    this_new_idxs = np.where(this_new_nocutoff < self.remove_high)
+                    this_new = this_new_nocutoff[this_new_idxs]
+                if np.shape(this_new)[0] > 0:
                     self.E_list[i_parse][j_parse] = np.append(this_array, this_new)
                     self.E_list[j_parse][i_parse] = np.append(this_array, this_new)
                     if self.count_all_similar:
@@ -328,6 +328,125 @@ class ComputeConfigIndividualMPI(ComputeConfigMPI):
             #save_dict = {"idx":idx, "jdx":jdx, "E": this_pair_E[idx,jdx]}
             #self.save_q.append(save_dict)
             self.save_q[idx][jdx] = np.append(self.save_q[idx][jdx], this_pair_E[idx,jdx])
+
+        self.still_going = False
+        enable_print()
+
+        self.n_jobs_run += 1
+
+        return
+
+class ConstructConfigSingleResidueMPI(ConstructConfigurationalMPI):
+    def __init__(self, *args, **kwargs):
+        specific_args = ["min_use"]
+        new_kwargs = {}
+        for thing in kwargs:
+            if thing in specific_args:
+                pass
+            else:
+                new_kwargs[thing] = kwargs[thing]
+        super(ConstructConfigSingleResidueMPI, self).__init__(*args, **new_kwargs)
+
+        if "min_use" in kwargs:
+            self.min_use = kwargs["min_use"]
+        else:
+            self.min_use = 0
+
+        self.was_updated = False
+
+    def _initialize_empty_results(self):
+        self.E_list = [np.empty(0) for i in range(self.nresidues)]
+        self._E_avg = np.zeros(self.nresidues)
+        self._E_sd = np.zeros(self.nresidues)
+
+    def assign_E_results(self, idx, avg, std):
+        self._E_avg[idx] = avg
+        self._E_sd[idx] = std
+
+    @property
+    def E_avg(self):
+        if self.was_updated:
+            self._save_compute_results()
+        return self._E_avg
+
+    @property
+    def E_sd(self):
+        if self.was_updated:
+            self._save_compute_results()
+
+        return self._E_sd
+
+    def _save_compute_results(self):
+        zero_count = 0
+        found_count = 0
+        min_count = 0
+        for idx in range(self.nresidues):
+            found_count += 1
+            this_list = self.E_list[idx]
+            if np.shape(this_list)[0] == 0:
+                E_avg = 0
+                E_sd = 0
+                zero_count += 1
+            elif np.shape(this_list)[0] < self.min_use:
+                E_avg = 0
+                E_sd = 0
+                min_count += 1
+            else:
+                E_avg, E_sd = compute_average_and_sd(this_list)
+            self.assign_E_results(idx, E_avg, E_sd)
+
+        self.was_updated = False
+        if self.verbose:
+            print "%f of the pairs had zero count while %f of the pairs had non-zero counts but were below the minimum threshold of %d" % (float(zero_count)/float(found_count), float(min_count)/float(found_count), self.min_use)
+
+    def process_results_q(self, results_q):
+        # take a queue as input, and then analyze the results
+        # for configurational, anticipate a list of pair energies
+        self.was_updated = True
+        count = 0
+        for i_parse in range(self.nresidues):
+            this_array = self.E_list[i_parse]
+            if self.remove_high is None:
+                this_new = results_q[i_parse]
+            else:
+                this_new_nocutoff = results_q[i_parse]
+                this_new_idxs = np.where(this_new_nocutoff < self.remove_high)
+                this_new = this_new_nocutoff[this_new_idxs]
+            if np.shape(this_new)[0] > 0:
+                self.E_list[i_parse] = np.append(this_array, this_new)
+                self.E_list[i_parse] = np.append(this_array, this_new)
+                count += np.shape(this_new)[0]
+
+        print "%d pairs were saved" % (count)
+
+class ComputeConfigSingleResidueMPI(ComputeConfigMPI):
+    def _initialize_saveq(self):
+        self.save_q = [np.empty(0) for i in range(self.nresidues)]
+
+    def run(self, index):
+        block_print()
+        self.still_going = True
+        if self.n_jobs_run % 1000 == 0:
+            # print what step you are on
+            enable_print()
+            self.print_status()
+            block_print()
+
+        this_traj, this_pose = self.clean_and_return_pose(index)
+
+        # get residue (1-indexed) contacts
+        close_contacts, close_contacts_zero, contacts_scores = determine_close_residues(this_traj, probability_cutoff=self.pcutoff, radius_cutoff=self.rcutoff)
+
+        this_pair_E = compute_pairwise(this_pose, self.scorefxn, self.order, self.weights, use_contacts=close_contacts, nresidues=self.nresidues)
+
+        for contact_index in close_contacts_zero:
+            idx = contact_index[0] #use the 0-indexed
+            jdx = contact_index[1] #use the 0-indexed
+
+            #save_dict = {"idx":idx, "jdx":jdx, "E": this_pair_E[idx,jdx]}
+            #self.save_q.append(save_dict)
+            self.save_q[idx] = np.append(self.save_q[idx], this_pair_E[idx,jdx])
+            self.save_q[jdx] = np.append(self.save_q[jdx], this_pair_E[idx,jdx])
 
         self.still_going = False
         enable_print()

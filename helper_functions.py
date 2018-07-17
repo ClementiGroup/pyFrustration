@@ -1,6 +1,6 @@
 from .util import *
 from .mutational import ConstructMutationalMPI, ComputePairMPI
-from .configurational import ConstructConfigurationalMPI, ComputeConfigMPI, ConstructConfigIndividualMPI, ComputeConfigIndividualMPI
+from .configurational import ConstructConfigurationalMPI, ComputeConfigMPI, ConstructConfigIndividualMPI, ComputeConfigIndividualMPI, ConstructConfigSingleResidueMPI, ComputeConfigSingleResidueMPI
 from .pose_manipulator import FrusPose
 
 def _func_gauss(x, mu, sigma, total=1.):
@@ -154,6 +154,21 @@ class BookKeeper(object):
         else:
             native_pair_E = compute_pairwise(native_pose, scorefxn_custom, order, weights, use_contacts=close_contacts, nresidues=native_fpose.nresidues) # account for deletions
 
+        single_residue_tot_E = np.zeros(native_fpose.nresidues)
+        single_residue_count = np.zeros(native_fpose.nresidues)
+
+        for pair_cont in close_contacts: # note, close_contacts is 1-indexed
+            idx = pair_cont[0] - 1
+            jdx = pair_cont[1] - 1
+            pair_E = native_pair_E[idx,jdx]
+            single_residue_tot_E[idx] += pair_E
+            single_residue_tot_E[jdx] += pair_E
+            single_residue_count[idx] += 1
+            single_residue_count[jdx] += 1
+
+        single_residue_count[np.where(single_residue_count == 0)] = 1000000
+        single_residue_avg_E = single_residue_tot_E / single_residue_count
+
         self.native_pose = native_pose
         self.native_fpose = native_fpose
         self.scorefxn_custom = scorefxn_custom
@@ -162,6 +177,7 @@ class BookKeeper(object):
         self.close_contacts = close_contacts
         self.scratch_dir = scratch_dir
         self.native_pair_E = native_pair_E
+        self.single_residue_avg_E = single_residue_avg_E
 
     def initialize_rosetta(self, verbose=False):
         comm = MPI.COMM_WORLD
@@ -192,6 +208,17 @@ class BookKeeper(object):
 
         return new_pair_E
 
+    def remap_singleE(self, data, size):
+        # re-map the final matrix to new dimensions
+        new_sing_E = np.zeros(size)
+        for i in range(np.shape(data)[0]):
+            idx = self.native_fpose.current_indices[i]
+            value = data[i]
+
+            new_sing_E[idx] = value
+
+        return new_sing_E
+
     def save_results(self, decoy_avg, decoy_sd):
         self.decoy_avg = decoy_avg
         self.decoy_sd = decoy_sd
@@ -199,8 +226,15 @@ class BookKeeper(object):
 
         if self.rank == 0:
             np.savetxt("%s/native_pairwise.dat" % self.savedir, self.remap_pairE(self.native_pair_E, true_size))
-            np.savetxt("%s/decoy_avg.dat" % self.savedir, self.remap_pairE(decoy_avg, true_size))
-            np.savetxt("%s/decoy_sd.dat" % self.savedir, self.remap_pairE(decoy_sd, true_size))
+            np.savetxt("%s/native_single_residue.dat" % self.savedir, self.remap_singleE(self.single_residue_avg_E, true_size))
+
+            if decoy_avg.ndim == 2:
+                np.savetxt("%s/decoy_avg.dat" % self.savedir, self.remap_pairE(decoy_avg, true_size))
+                np.savetxt("%s/decoy_sd.dat" % self.savedir, self.remap_pairE(decoy_sd, true_size))
+
+            if decoy_avg.ndim == 1:
+                np.savetxt("%s/decoy_avg.dat" % self.savedir, self.remap_singleE(decoy_avg, true_size))
+                np.savetxt("%s/decoy_sd.dat" % self.savedir, self.remap_singleE(decoy_sd, true_size))
 
     def save_decoy_results(self, decoy_list):
         self.decoy_list = decoy_list
@@ -226,6 +260,26 @@ class BookKeeper(object):
                     count_array[idx,jdx] = np.shape(decoyE)[0]
                     chi, avg, sd = compute_gaussian_and_chi(decoyE)
                     chi_array[idx,jdx] = chi
+            np.savetxt("%s/decoy_gaussian_reduced_chi2.dat" % (self.savedir), chi_array)
+            np.savetxt("%s/decoy_gaussian_counts.dat" % (self.savedir), count_array)
+
+    def save_specific_single_residues(self, decoy_list_array, save_residues):
+        self.decoy_list_array = decoy_list_array
+        if self.rank == 0:
+            for i in range(np.shape(save_residues)[0]):
+                pidx = save_residues[i]
+                this_E_list = decoy_list_array[pidx]
+                np.save("%s/decoy_E_list_%d" % (self.savedir, pidx), this_E_list)
+
+    def analyze_all_single_residues(self, decoy_list_array, spacing=0.2):
+        if self.rank == 0:
+            chi_array = np.zeros(len(decoy_list_array))
+            count_array = np.zeros(len(decoy_list_array))
+            for idx in range(len(decoy_list_array)):
+                decoyE = decoy_list_array[idx]
+                count_array[idx] = np.shape(decoyE)[0]
+                chi, avg, sd = compute_gaussian_and_chi(decoyE)
+                chi_array[idx] = chi
             np.savetxt("%s/decoy_gaussian_reduced_chi2.dat" % (self.savedir), chi_array)
             np.savetxt("%s/decoy_gaussian_counts.dat" % (self.savedir), count_array)
 
@@ -312,7 +366,7 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
 
         print "THE END"
 
-def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, pcutoff=0.8, native_contacts=None, use_contacts=None, contacts_scores=None, use_config_individual_pairs=False, min_use=10, save_pairs=None, remove_high=None, count_all_similar=False):
+def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, pcutoff=0.8, native_contacts=None, use_contacts=None, contacts_scores=None, use_config_individual_pairs=False, min_use=10, save_pairs=None, save_residues=None, remove_high=None, count_all_similar=False, use_compute_single_residue=False):
     comm = MPI.COMM_WORLD
 
     rank = comm.Get_rank()
@@ -329,14 +383,24 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
         use_verbose = True
     else:
         use_verbose = False
+
+    if use_config_individual_pairs and use_compute_single_residue:
+        print "Warning: Both individual paris and single residue mode is activated. Defaulting to individual pairs"
+
     if use_config_individual_pairs:
         analysis_object = ConstructConfigIndividualMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, min_use=min_use, verbose=use_verbose, remove_high=remove_high, count_all_similar=count_all_similar)
 
-        new_computer = ComputeConfigIndividualMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, native_fpose, pcutoff=0.8, rcutoff=analysis_object.decoy_r_cutoff)
+        new_computer = ComputeConfigIndividualMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, native_fpose, pcutoff=pcutoff, rcutoff=analysis_object.decoy_r_cutoff)
+
+    elif use_compute_single_residue:
+        analysis_object = ConstructConfigSingleResidueMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, min_use=min_use, verbose=use_verbose, remove_high=remove_high)
+
+        new_computer = ComputeConfigSingleResidueMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, native_fpose, pcutoff=pcutoff, rcutoff=analysis_object.decoy_r_cutoff)
+
     else:
         analysis_object = ConstructConfigurationalMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, verbose=use_verbose, remove_high=remove_high)
 
-        new_computer = ComputeConfigMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, native_fpose, pcutoff=0.8, rcutoff=analysis_object.decoy_r_cutoff)
+        new_computer = ComputeConfigMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, native_fpose, pcutoff=pcutoff, rcutoff=analysis_object.decoy_r_cutoff)
 
     analyze_indices = analysis_object.inputs_collected
     n_analyze = len(analyze_indices)
@@ -378,14 +442,20 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
 
     if rank == 0:
         print "finished saving basic results"
-        if not use_config_individual_pairs:
+        if use_config_individual_pairs: # heterogeneous 1 or 2
+            book_keeper.analyze_all_pairs(analysis_object.E_list)
+            if save_pairs is not None:
+                book_keeper.save_specific_pairs(analysis_object.E_list, save_pairs)
+        elif use_compute_single_residue: # single residue
+            book_keeper.analyze_all_single_residues(analysis_object.E_list)
+            if save_residues is not None:
+                book_keeper.save_specific_single_residues(analysis_object.E_list, save_residues)
+
+        else: # homogeneous
             book_keeper.save_decoy_results(analysis_object.E_list)
             chi, avg, sd = compute_gaussian_and_chi(analysis_object.E_list)
             f = open("%s/chi2.dat" % (book_keeper.savedir), "w")
             f.write("%f   %f   %f\n" % (chi, avg, sd))
             f.close()
-        else:
-            book_keeper.analyze_all_pairs(analysis_object.E_list)
-            if save_pairs is not None:
-                book_keeper.save_specific_pairs(analysis_object.E_list, save_pairs)
+
         print "finished saving individual pairs and chi2 results"
