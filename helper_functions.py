@@ -377,6 +377,7 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
 
 
     if rank == 0:
+        print "finished saving basic results"
         if not use_config_individual_pairs:
             book_keeper.save_decoy_results(analysis_object.E_list)
             chi, avg, sd = compute_gaussian_and_chi(analysis_object.E_list)
@@ -387,3 +388,4 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
             book_keeper.analyze_all_pairs(analysis_object.E_list)
             if save_pairs is not None:
                 book_keeper.save_specific_pairs(analysis_object.E_list, save_pairs)
+        print "finished saving individual pairs and chi2 results"

@@ -243,26 +243,29 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
         try:
             assert total_counts == ((self.nresidues * 4) - 8)
         except:
-            print "Total Counts is %d, expected %d" % (total_counts, ((self.nresidues*4)-8))
+            print "Counted %d pairs, but expected %d" % (total_counts, ((self.nresidues*4)-8))
             raise
 
     def process_results_q(self, results_q):
         # take a queue as input, and then analyze the results
         # for configurational, anticipate a list of pair energies
         self.was_updated = True
+        count = 0
         for i_parse in range(self.nresidues):
-            for j_parse in range(self.nresidues):
+            for j_parse in range(i_parse+1, self.nresidues):
                 this_array = self.E_list[i_parse][j_parse]
-                if self.remove_high is None:
-                    this_new = results_q[i_parse][j_parse]
-                else:
-                    this_new_nocutoff = results_q[i_parse][j_parse]
-                    this_new_idxs = np.where(this_new_nocutoff < self.remove_high)
-                    this_new = this_new_nocutoff[this_new_idxs]
-                self.E_list[i_parse][j_parse] = np.append(this_array, this_new)
-                if self.count_all_similar:
-                    self.append_all_similar(i_parse, j_parse, this_new)
-                count += np.shape(this_new)[0]
+                if np.shape(this_array)[0] > 0:
+                    if self.remove_high is None:
+                        this_new = results_q[i_parse][j_parse]
+                    else:
+                        this_new_nocutoff = results_q[i_parse][j_parse]
+                        this_new_idxs = np.where(this_new_nocutoff < self.remove_high)
+                        this_new = this_new_nocutoff[this_new_idxs]
+                    self.E_list[i_parse][j_parse] = np.append(this_array, this_new)
+                    self.E_list[j_parse][i_parse] = np.append(this_array, this_new)
+                    if self.count_all_similar:
+                        self.append_all_similar(i_parse, j_parse, this_new)
+                    count += np.shape(this_new)[0]
 
         print "%d pairs were saved" % (count)
 
@@ -312,8 +315,16 @@ class ComputeConfigIndividualMPI(ComputeConfigMPI):
         this_pair_E = compute_pairwise(this_pose, self.scorefxn, self.order, self.weights, use_contacts=close_contacts, nresidues=self.nresidues)
 
         for contact_index in close_contacts_zero:
-            idx = contact_index[0] #use the 0-indexed
-            jdx = contact_index[1] #use the 0-indexed
+            i_first = contact_index[0] #use the 0-indexed
+            i_second = contact_index[1] #use the 0-indexed
+
+            if i_first < i_second: #bigger index last
+                idx =  i_first
+                jdx = i_second
+            else:
+                idx = i_second
+                jdx = i_first
+
             #save_dict = {"idx":idx, "jdx":jdx, "E": this_pair_E[idx,jdx]}
             #self.save_q.append(save_dict)
             self.save_q[idx][jdx] = np.append(self.save_q[idx][jdx], this_pair_E[idx,jdx])
