@@ -235,9 +235,9 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
         for i in range(self.nresidues):
             if i != idx and i != jdx:
                 self.E_list[i][jdx] = np.append(self.E_list[i][jdx], E)
-                self.E_list[jdx][i] = np.append(self.E_list[jdx][i], E)
+                self.E_list[jdx][i] = self.E_list[i][jdx]
                 self.E_list[i][idx] = np.append(self.E_list[i][idx], E)
-                self.E_list[idx][i] = np.append(self.E_list[idx][i], E)
+                self.E_list[idx][i] = self.E_list[i][idx]
                 total_counts += 4
 
         try:
@@ -262,7 +262,7 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
                     this_new = this_new_nocutoff[this_new_idxs]
                 if np.shape(this_new)[0] > 0:
                     self.E_list[i_parse][j_parse] = np.append(this_array, this_new)
-                    self.E_list[j_parse][i_parse] = np.append(this_array, this_new)
+                    self.E_list[j_parse][i_parse] = self.E_list[i_parse][j_parse]
                     if self.count_all_similar:
                         self.append_all_similar(i_parse, j_parse, this_new)
                     count += np.shape(this_new)[0]
