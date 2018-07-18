@@ -156,7 +156,8 @@ class BookKeeper(object):
 
         single_residue_tot_E = np.zeros(native_fpose.nresidues)
         single_residue_count = np.zeros(native_fpose.nresidues)
-
+        """
+        # compute across all contact pairs. Makes NO SENSE if you have rcutoff>0.6
         for pair_cont in close_contacts: # note, close_contacts is 1-indexed
             idx = pair_cont[0] - 1
             jdx = pair_cont[1] - 1
@@ -165,7 +166,13 @@ class BookKeeper(object):
             single_residue_tot_E[jdx] += pair_E
             single_residue_count[idx] += 1
             single_residue_count[jdx] += 1
-
+        """
+        for i_res in range(native_fpose.nresidues):
+            this_row = native_pair_E[i_res, :]
+            for value in this_row:
+                if value != 0:
+                    single_residue_tot_E[i_res] += value
+                    single_residue_count[i_res] += 1
         single_residue_count[np.where(single_residue_count == 0)] = 1000000
         single_residue_avg_E = single_residue_tot_E / single_residue_count
 
