@@ -1,5 +1,5 @@
 from .util import *
-from .mutational import ConstructMutationalMPI, ComputePairMPI
+from .mutational import ConstructMutationalMPI, ComputePairMPI, ConstructMutationalSingleMPI, ComputeSingleMPI
 from .configurational import ConstructConfigurationalMPI, ComputeConfigMPI, ConstructConfigIndividualMPI, ComputeConfigIndividualMPI, ConstructConfigSingleResidueMPI, ComputeConfigSingleResidueMPI
 from .pose_manipulator import FrusPose
 
@@ -320,23 +320,30 @@ class BookKeeperSingleResidue(BookKeeper):
             np.savetxt("%s/decoy_sd.dat" % self.savedir, self.remap_pairE(decoy_sd, true_size))
 
 
-def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None, compute_all_neighbors=False, save_pairs=None):
+def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None, compute_all_neighbors=False, save_pairs=None, save_residues=None, use_compute_single_residue=False):
     comm = MPI.COMM_WORLD
 
     rank = comm.Get_rank()
     size = comm.Get_size()
 
+    if use_compute_single_residue:
+        print "Using Single Residue Mode"
+        Constructor = ConstructMutationalSingleMPI
+        Runner = ComputeSingleMPI
+    else:
+        Constructor = ConstructMutationalMPI
+        Runner = ComputePairMPI
     pose = book_keeper.native_pose
     scorefxn = book_keeper.scorefxn_custom
     order = book_keeper.order
     weights = book_keeper.weights
     nresidues = book_keeper.nresidues
 
-    analysis_object = ConstructMutationalMPI(nresidues, use_contacts=use_contacts, contacts_scores=contacts_scores)
+    analysis_object = Constructor(nresidues, use_contacts=use_contacts, contacts_scores=contacts_scores)
 
     analyze_pairs = analysis_object.inputs_collected
     n_analyze = len(analyze_pairs)
-    new_computer = ComputePairMPI(rank, analyze_pairs, pose, scorefxn, order, weights, ndecoys, nresidues, pack_radius=pack_radius, mutation_scheme=mutation_scheme, remove_high=remove_high, compute_all_neighbors=compute_all_neighbors)
+    new_computer = Runner(rank, analyze_pairs, pose, scorefxn, order, weights, ndecoys, nresidues, pack_radius=pack_radius, mutation_scheme=mutation_scheme, remove_high=remove_high, compute_all_neighbors=compute_all_neighbors)
 
     job_indices = get_mpi_jobs(n_analyze, rank, size)
     new_computer.run(job_indices)
@@ -359,17 +366,23 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
 
     comm.Barrier()
 
+    E_avg, E_std = analysis_object.get_saved_results()
+    book_keeper.save_results(E_avg, E_std)
+
+
     if rank == 0:
         # get_saved results
-        E_avg, E_std = analysis_object.get_saved_results()
-        book_keeper.save_results(E_avg, E_std)
+        if use_compute_single_residue:
+            book_keeper.analyze_all_single_residues(analysis_object.E_list)
+            if save_residues is not None:
+                book_keeper.save_specific_single_residues(analysis_object.E_list, save_residues)
+        else:
+            all_e_list = analysis_object.all_e_list
+            book_keeper.analyze_all_pairs(all_e_list)
 
-        all_e_list = analysis_object.all_e_list
-        book_keeper.analyze_all_pairs(all_e_list)
-
-        if save_pairs is not None:
-            for pair in save_pairs:
-                np.savetxt("%s/decoy_E_list_%d-%d.npy" % (book_keeper.savedir, pair[0], pair[1]), all_e_list[pair[0]-1][pair[1]-1])
+            if save_pairs is not None:
+                for pair in save_pairs:
+                    np.savetxt("%s/decoy_E_list_%d-%d.npy" % (book_keeper.savedir, pair[0], pair[1]), all_e_list[pair[0]-1][pair[1]-1])
 
         print "THE END"
 
