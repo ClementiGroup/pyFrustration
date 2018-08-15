@@ -334,10 +334,11 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
         Constructor = ConstructMutationalMPI
         Runner = ComputePairMPI
     pose = book_keeper.native_pose
+    fpose = book_keeper.native_fpose
     scorefxn = book_keeper.scorefxn_custom
     order = book_keeper.order
     weights = book_keeper.weights
-    nresidues = book_keeper.nresidues
+    nresidues = fpose.nresidues
 
     analysis_object = Constructor(nresidues, use_contacts=use_contacts, contacts_scores=contacts_scores)
 

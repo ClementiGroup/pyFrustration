@@ -157,7 +157,6 @@ class ComputePairMPI(object):
     def select_new_single(self, idx, possible_residues):
         go = True
         while go:
-            count += 1
             new_res1 = random.choice(possible_residues)
             new = self.check_unique_mutated_residue_byidx([idx], [new_res1]) # True if one residue is new
             #go = not new
