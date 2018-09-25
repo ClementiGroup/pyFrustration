@@ -20,8 +20,12 @@ class ConstructMutationalMPI(object):
         else:
             all_indices = []
             for contact in self.use_contacts:
-                assert contact[0] > 0
-                assert contact[1] > 0
+                try:
+                    assert contact[0] > 0
+                    assert contact[1] > 0
+                except:
+                    print contact
+                    raise
                 all_indices.append({"idx":contact[0], "jdx":contact[1]})
 
             if self.contacts_scores is not None:

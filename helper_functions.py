@@ -2,6 +2,7 @@ from .util import *
 from .mutational import ConstructMutationalMPI, ComputePairMPI, ConstructMutationalSingleMPI, ComputeSingleMPI
 from .configurational import ConstructConfigurationalMPI, ComputeConfigMPI, ConstructConfigIndividualMPI, ComputeConfigIndividualMPI, ConstructConfigSingleResidueMPI, ComputeConfigSingleResidueMPI
 from .pose_manipulator import FrusPose
+import datetime
 
 def _func_gauss(x, mu, sigma, total=1.):
     if sigma == 0:
@@ -37,7 +38,7 @@ def compute_gaussian_and_chi(decoyE, spacing=0.2):
     return chi, avg, sd
 
 class BookKeeper(object):
-    def __init__(self, native_file, nresidues, savedir=None, use_hbonds=False, relax_native=False, rcutoff=0.6, pcutoff=0.8, mutate_traj=None, delete_traj=None, repack_radius=10, compute_all_neighbors=False):
+    def __init__(self, native_file, nresidues, savedir=None, use_hbonds=False, relax_native=False, rcutoff=0.6, pcutoff=0.8, mutate_traj=None, delete_traj=None, repack_radius=10, compute_all_neighbors=False, min_use=0):
         self.native_file = native_file
         if savedir is None:
             savedir = os.getcwd()
@@ -53,6 +54,7 @@ class BookKeeper(object):
         self.delete_traj = delete_traj
         self.repack_radius = repack_radius
         self.compute_all_neighbors = compute_all_neighbors
+        self.min_use = min_use
 
         self.decoy_avg = None
         self.decoy_sd = None
@@ -123,7 +125,7 @@ class BookKeeper(object):
         native_fpose = FrusPose(native_pose, repack_radius=self.repack_radius)
 
         if (self.mutate_traj is None) and (self.delete_traj is None):
-            close_contacts, close_contacts_zero, contacts_scores = determine_close_residues_from_file(native_file, probability_cutoff=pcutoff, radius_cutoff=rcutoff)
+            final_native_dumped_file = native_file
         else:
             print "Mutating the structure"
             dump_file = "%s/mutated_pdb_0.pdb" % (scratch_dir)
@@ -136,19 +138,27 @@ class BookKeeper(object):
             new_native_pose = pyr.pose_from_pdb(dump_file)
             native_fpose = native_fpose.duplicate_nochange_new_pose(new_native_pose)
             native_pose = new_native_pose
-            close_contacts, close_contacts_zero, contacts_scores = determine_close_residues_from_file(dump_file, probability_cutoff=pcutoff, radius_cutoff=rcutoff)
+            final_native_dumped_file = dump_file
 
         if relax_native:
-            raise IOError("Option is not implemented for multiple threads or multiple mutations/deletions")
+            #raise IOError("Option is not implemented for multiple threads or multiple mutations/deletions")
             dump_relaxed_file = "%s/relaxed_pdb_0.pdb" % (scratch_dir)
             if rank == 0:
                 relaxer = ClassicRelax()
                 relaxer.set_scorefxn(pyrt.get_fa_scorefxn())
                 relaxer.apply(native_pose)
+                native_pose.dump_pdb(dump_relaxed_file)
             self.comm.Barrier()
-            native_pose = pyr.pose_from_pdb(dump_relaxed_file)
-            native_fpose = native_fpose.duplicate_nochange_new_pose(native_pose)
+            new_native_pose = pyr.pose_from_pdb(dump_relaxed_file)
+            native_fpose = native_fpose.duplicate_nochange_new_pose(new_native_pose)
+            native_pose = new_native_pose
+            final_native_dumped_file = dump_relaxed_file
 
+        close_contacts, close_contacts_zero, contacts_scores = determine_close_residues_from_file(final_native_dumped_file, probability_cutoff=pcutoff, radius_cutoff=rcutoff)
+        #debug
+        #print native_pose.sequence()
+        #raise
+        #debug
         if self.compute_all_neighbors:
             native_pair_E = compute_pairwise_allinteractions(native_pose, scorefxn_custom, order, weights, use_contacts=close_contacts, nresidues=native_fpose.nresidues) # account for deletions
         else:
@@ -226,6 +236,33 @@ class BookKeeper(object):
 
         return new_sing_E
 
+    def get_basic_info(self):
+        info_str = ""
+        today = datetime.datetime.today()
+        info_str += "for : %s, on %s \n" % (self.savedir, today)
+        info_str += "original native_file = %s\n" % (self.native_file)
+        info_str += "repack_radius = %s\n" % str(self.repack_radius)
+        info_str += "rcutoff = %0.2f \n" % (self.rcutoff)
+        info_str += "pcutoff = %0.2f \n" % (self.pcutoff)
+        info_str += "nresidues = %0.2f \n" % (self.nresidues)
+        info_str += "use_hbonds = %s \n" % (str(self.use_hbonds))
+        info_str += "relax_native = %s \n" % (str(self.relax_native))
+        info_str += "mutation_list = %s \n" % (str(self.native_fpose.mutation_list))
+        info_str += "deletion_ranges = %s \n" % (str(self.native_fpose.deletion_ranges))
+
+        return info_str
+
+    def save_basic_info(self, info=None):
+        f = open("%s/info.txt" % (self.savedir), "w")
+        f.write(self.get_basic_info())
+        f.write("\n")
+        f.write("Process Specific Details:\n")
+        f.write(info)
+        f.close()
+
+        # dump a copy of this particular native.pdb file for future reference
+        self.native_fpose.dump_to_pdb("%s/native.pdb" % (self.savedir))
+
     def save_results(self, decoy_avg, decoy_sd):
         self.decoy_avg = decoy_avg
         self.decoy_sd = decoy_sd
@@ -265,8 +302,10 @@ class BookKeeper(object):
                 for jdx in range(len(decoy_list_array)):
                     decoyE = decoy_list_array[idx][jdx]
                     count_array[idx,jdx] = np.shape(decoyE)[0]
-                    chi, avg, sd = compute_gaussian_and_chi(decoyE)
-                    chi_array[idx,jdx] = chi
+                    if np.shape(decoyE)[0] > self.min_use:
+                        # default value is zero if not a lot of data exists
+                        chi, avg, sd = compute_gaussian_and_chi(decoyE)
+                        chi_array[idx,jdx] = chi
             np.savetxt("%s/decoy_gaussian_reduced_chi2.dat" % (self.savedir), chi_array)
             np.savetxt("%s/decoy_gaussian_counts.dat" % (self.savedir), count_array)
 
@@ -319,6 +358,72 @@ class BookKeeperSingleResidue(BookKeeper):
             np.savetxt("%s/decoy_avg.dat" % self.savedir, self.remap_pairE(decoy_avg, true_size))
             np.savetxt("%s/decoy_sd.dat" % self.savedir, self.remap_pairE(decoy_sd, true_size))
 
+def redo_compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None, compute_all_neighbors=False, save_pairs=None, save_residues=None, use_compute_single_residue=False):
+    comm = MPI.COMM_WORLD
+
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+
+    if use_compute_single_residue:
+        print "Using Single Residue Mode"
+        mutational_procedure_name = "Mutational Single Residue"
+        Constructor = ConstructMutationalSingleMPI
+        Runner = ComputeSingleMPI
+    else:
+        mutational_procedure_name = "Mutational Frustration"
+        Constructor = ConstructMutationalMPI
+        Runner = ComputePairMPI
+    pose = book_keeper.native_pose
+    fpose = book_keeper.native_fpose
+    scorefxn = book_keeper.scorefxn_custom
+    order = book_keeper.order
+    weights = book_keeper.weights
+    nresidues = fpose.nresidues
+
+    analysis_object = Constructor(nresidues, use_contacts=use_contacts, contacts_scores=contacts_scores)
+
+    analyze_pairs = analysis_object.inputs_collected
+    n_analyze = len(analyze_pairs)
+    new_computer = Runner(rank, analyze_pairs, pose, scorefxn, order, weights, ndecoys, nresidues, pack_radius=pack_radius, mutation_scheme=mutation_scheme, remove_high=remove_high, compute_all_neighbors=compute_all_neighbors)
+
+    job_indices = get_mpi_jobs(n_analyze, rank, size)
+    new_computer.run(job_indices)
+
+    new_computer.print_status()
+
+    # wait until all jobs finish
+    comm.Barrier()
+
+    # send block
+    if rank == 0:
+        print "Finished All Calculations"
+        analysis_object.process_results_q(new_computer.save_q)
+        for i in range(1, size):
+            results = comm.recv(source=i, tag=3)
+            analysis_object.process_results_q(results)
+        print "Finished Saving all results"
+    else:
+        comm.send(new_computer.save_q, dest=0, tag=3)
+
+    comm.Barrier()
+
+    if rank == 0:
+        # get_saved results
+        if use_compute_single_residue:
+            book_keeper.analyze_all_single_residues(analysis_object.E_list)
+            if save_residues is not None:
+                book_keeper.save_specific_single_residues(analysis_object.E_list, save_residues)
+        else:
+            all_e_list = analysis_object.all_e_list
+            book_keeper.analyze_all_pairs(all_e_list)
+
+            if save_pairs is not None:
+                for pair in save_pairs:
+                    np.savetxt("%s/decoy_E_list_%d-%d.npy" % (book_keeper.savedir, pair[0], pair[1]), all_e_list[pair[0]-1][pair[1]-1])
+
+        print "THE END"
+
+
 
 def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None, compute_all_neighbors=False, save_pairs=None, save_residues=None, use_compute_single_residue=False):
     comm = MPI.COMM_WORLD
@@ -328,9 +433,11 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
 
     if use_compute_single_residue:
         print "Using Single Residue Mode"
+        mutational_procedure_name = "Mutational Single Residue"
         Constructor = ConstructMutationalSingleMPI
         Runner = ComputeSingleMPI
     else:
+        mutational_procedure_name = "Mutational Frustration"
         Constructor = ConstructMutationalMPI
         Runner = ComputePairMPI
     pose = book_keeper.native_pose
@@ -370,7 +477,6 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
     E_avg, E_std = analysis_object.get_saved_results()
     book_keeper.save_results(E_avg, E_std)
 
-
     if rank == 0:
         # get_saved results
         if use_compute_single_residue:
@@ -385,7 +491,20 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
                 for pair in save_pairs:
                     np.savetxt("%s/decoy_E_list_%d-%d.npy" % (book_keeper.savedir, pair[0], pair[1]), all_e_list[pair[0]-1][pair[1]-1])
 
+        mut_info = "Mutational Frustration Computed with: %s \n" % (mutational_procedure_name)
+        mut_info += "ndecoys = %d" % ndecoys
+        mut_info += "pack_radius = %g" % pack_radius
+        mut_info += "scheme = %s" % mutation_scheme
+        mut_info += "use_contacts = %s" % str(use_contacts)
+        mut_info += "contacts_scores = %s" % str(contacts_scores)
+        mut_info += "remove_high = %s" % (str(remove_high))
+        mut_info += "compute_all_neighbors = %s" % (str(compute_all_neighbors))
+
+        book_keeper.save_basic_info(info=mut_info)
+
         print "THE END"
+
+
 
 def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, pcutoff=0.8, native_contacts=None, use_contacts=None, contacts_scores=None, use_config_individual_pairs=False, min_use=10, save_pairs=None, save_residues=None, remove_high=None, count_all_similar=False, use_compute_single_residue=False):
     comm = MPI.COMM_WORLD
@@ -409,16 +528,23 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
         print "Warning: Both individual paris and single residue mode is activated. Defaulting to individual pairs"
 
     if use_config_individual_pairs:
+        if count_all_similar:
+            this_procedure_number = 2
+        else:
+            this_procedure_number = 1
+        this_procedure_name = "Heterogeneous %d" % (this_procedure_number)
         analysis_object = ConstructConfigIndividualMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, min_use=min_use, verbose=use_verbose, remove_high=remove_high, count_all_similar=count_all_similar)
 
         new_computer = ComputeConfigIndividualMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, native_fpose, pcutoff=pcutoff, rcutoff=analysis_object.decoy_r_cutoff)
 
     elif use_compute_single_residue:
+        this_procedure_name = "Single Residue"
         analysis_object = ConstructConfigSingleResidueMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, min_use=min_use, verbose=use_verbose, remove_high=remove_high)
 
         new_computer = ComputeConfigSingleResidueMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, native_fpose, pcutoff=pcutoff, rcutoff=analysis_object.decoy_r_cutoff)
 
     else:
+        this_procedure_name = "Homogeneous"
         analysis_object = ConstructConfigurationalMPI(nresidues, top_file, configurational_traj_file, configurational_dtraj=configurational_dtraj, configurational_parameters=configurational_parameters, native_contacts=native_contacts, verbose=use_verbose, remove_high=remove_high)
 
         new_computer = ComputeConfigMPI(rank, nresidues, configurational_traj_file, top_file, scorefxn, order, weights, scratch_dir, native_fpose, pcutoff=pcutoff, rcutoff=analysis_object.decoy_r_cutoff)
@@ -478,5 +604,22 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
             f = open("%s/chi2.dat" % (book_keeper.savedir), "w")
             f.write("%f   %f   %f\n" % (chi, avg, sd))
             f.close()
+
+        config_info = "Configurational Frustration Computed with: %s \n" % (this_procedure_name)
+        config_info += "top_file = %s \n" % top_file
+        config_info += "traj_file = %s \n" % configurational_traj_file
+        config_info += "dtraj_file = %s \n" % str(configurational_dtraj)
+        config_info += "dtraj highcutoff = %s \n" % (configurational_parameters["highcutoff"])
+        config_info += "dtraj lowcutoff = %f \n" % (configurational_parameters["lowcutoff"])
+        config_info += "stride = %d \n" % (configurational_parameters["stride_length"])
+        config_info += "decoy_r_cutoff = %f \n" % (configurational_parameters["decoy_r_cutoff"])
+        config_info += "pcutoff = %g \n" % pcutoff
+        config_info += "native_contacts = %s \n" % str(native_contacts)
+        config_info += "use_contacts = %s \n" % str(use_contacts)
+        config_info += "contacts_scores = %s \n" % str(contacts_scores)
+        config_info += "min_use = %d \n" % (min_use)
+        config_info += "remove_high = %s \n" % (remove_high)
+
+        book_keeper.save_basic_info(info=config_info)
 
         print "finished saving individual pairs and chi2 results"
