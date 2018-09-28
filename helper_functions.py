@@ -60,18 +60,85 @@ class BookKeeper(object):
         self.decoy_sd = None
         self.decoy_list = None
         self.decoy_list_array = None
+        self.this_native_indices = []
 
         self.initialize_rosetta()
-        self.prepare_simulations()
 
-    def prepare_simulations(self):
-        native_file = self.native_file
+        native_trajs = md.load(native_file)
+        self.n_native_structures = native_trajs.n_frames
+
+        self.initialize_basic()
+        if self.size > self.n_native_structures:
+            skip = self.n_native_structures
+        else:
+            skip = self.size
+        if self.rank < self.n_native_structures:
+            # this should do the heavy lifting, prepare simulations and save them
+            for i in range(self.n_native_structures)[self.rank::skip]:
+                this_prefix = "initial_native_%d" % (i)
+                this_native_file = "%s/%s.pdb" % (self.scratch_dir, this_prefix)
+                this_native_file_cleaned = "%s/%s.clean.pdb" % (self.scratch_dir, this_prefix)
+
+                native_trajs[i].save(this_native_file)
+                clean_pdb_files(self.scratch_dir, ["%s.pdb" % this_prefix])
+                self.prepare_simulations(this_native_file_cleaned, i)
+                self.this_native_indices.append(i)
+
+        self.comm.Barrier()
+
+        #this next function transfers and does all the moving in the end
+        self.initialize_average_results()
+
+    def initialize_average_results(self):
+        # all the native results (don't want to recompute)
+        self.all_native_pair_E = []
+        self.all_single_residue_avg_E = []
+        self.all_native_pose = []
+        self.all_native_fpose = []
+
+        for native_index in range(self.n_native_structures):
+            native_pose = pyr.pose_from_pdb("%s/initial_native_%d.clean.pdb" % (self.scratch_dir, native_index))
+            native_fpose = FrusPose(native_pose, repack_radius=self.repack_radius)
+            new_native_pose = pyr.pose_from_pdb("%s/final_native_index%d.pdb" % (self.scratch_dir, native_index))
+            native_fpose = native_fpose.duplicate_nochange_new_pose(new_native_pose)
+            native_fpose.add_change_history(mutation_list=self.mutate_traj, deletion_ranges=self.delete_traj)
+
+            self.all_native_pose.append(new_native_pose)
+            self.all_native_fpose.append(native_fpose)
+            self.all_native_pair_E.append(np.load("%s/native_pair_E_index%d.npy" % (self.scratch_dir, native_index)))
+            self.all_single_residue_avg_E.append(np.load("%s/single_residue_avg_E_index%d.npy" % (self.scratch_dir, native_index)))
+            self.process_close_contacts(np.load("%s/close_contacts_zero_index%d.npy" % (self.scratch_dir, native_index)))
+
+            # check and maintain attributes from the native_fpose
+            if self.true_size is None:
+                self.true_size = native_fpose.old_nresidues
+            else:
+                assert self.true_size == native_fpose.old_nresidues
+
+            if self.native_fpose_mutation_list is None:
+                self.native_fpose_mutation_list = native_fpose.mutation_list
+
+            if self.native_fpose_deletion_ranges is None:
+                self.native_fpose_deletion_ranges = native_fpose.deletion_ranges
+
+            if self.native_fpose_current_indices is None:
+                self.native_fpose_current_indices = native_fpose.current_indices
+
+            if self.final_nresidues is None:
+                self.final_nresidues = native_fpose.nresidues
+
+        self.native_pair_E = np.zeros((self.nresidues,self.nresidues))
+        self.single_residue_avg_E = np.zeros((self.nresidues))
+        for i in range(self.n_native_structures):
+            self.native_pair_E += self.all_native_pair_E[i]
+            self.single_residue_avg_E += self.all_single_residue_avg_E[i]
+
+        self.native_pair_E /= self.n_native_structures
+        self.single_residue_avg_E /= self.n_native_structures
+
+    def initialize_basic(self):
         savedir = self.savedir
         use_hbonds = self.use_hbonds
-        relax_native = self.relax_native
-        rcutoff = self.rcutoff
-        pcutoff = self.pcutoff
-        nresidues = self.nresidues
 
         comm = MPI.COMM_WORLD
 
@@ -121,40 +188,70 @@ class BookKeeper(object):
         for thing, wt in zip(order,weights):
             scorefxn_custom.set_weight(thing, wt)
 
+        self.scorefxn_custom = scorefxn_custom
+        self.order = order
+        self.weights = weights
+        self.scratch_dir = scratch_dir
+
+        # attributes from native_fpose to check and confirm are identical
+        self.true_size = None
+        self.final_nresidues = None
+        self.native_fpose_mutation_list = None
+        self.native_fpose_deletion_ranges = None
+        self.native_fpose_current_indices = None
+
+        # residue pairs in close proximity in any frame
+        self.close_contacts = [] # 1-indexed for later (because of rosetta)
+        self.close_contacts_array = np.zeros((self.nresidues,self.nresidues))
+        # list of 1-0 arrays denoting close residue pairs in each frame.
+        self.all_close_contacts_arrays = []
+
+    def prepare_simulations(self, native_file, native_index):
+        relax_native = self.relax_native
+        rcutoff = self.rcutoff
+        pcutoff = self.pcutoff
+        nresidues = self.nresidues
+
+        # from the initialize basic part
+        rank = self.rank
+        scratch_dir = self.scratch_dir
+        scorefxn_custom = self.scorefxn_custom
+        order = self.order
+        weights = self.weights
+
         native_pose = pyr.pose_from_pdb(native_file)
         native_fpose = FrusPose(native_pose, repack_radius=self.repack_radius)
 
+        final_dump_file = "%s/final_native_index%d.pdb" % (self.scratch_dir, native_index)
+
         if (self.mutate_traj is None) and (self.delete_traj is None):
-            final_native_dumped_file = native_file
+            pass
         else:
             print "Mutating the structure"
-            dump_file = "%s/mutated_pdb_0.pdb" % (scratch_dir)
-            #if rank == 0:
-            # this is a hack. Need to write a method for adding a mutate_traj and a delete_traj list manually.
-            if True:
-                native_fpose.modify_protein(mutation_list=self.mutate_traj, deletion_ranges=self.delete_traj)
-                native_fpose.dump_to_pdb(dump_file)
-            self.comm.Barrier()
+            dump_file = "%s/mutated_pdb_%d.pdb" % (scratch_dir, self.rank)
+            native_fpose.modify_protein(mutation_list=self.mutate_traj, deletion_ranges=self.delete_traj)
+            native_fpose.dump_to_pdb(dump_file)
+
             new_native_pose = pyr.pose_from_pdb(dump_file)
             native_fpose = native_fpose.duplicate_nochange_new_pose(new_native_pose)
+
             native_pose = new_native_pose
-            final_native_dumped_file = dump_file
 
         if relax_native:
             #raise IOError("Option is not implemented for multiple threads or multiple mutations/deletions")
-            dump_relaxed_file = "%s/relaxed_pdb_0.pdb" % (scratch_dir)
-            if rank == 0:
-                relaxer = ClassicRelax()
-                relaxer.set_scorefxn(pyrt.get_fa_scorefxn())
-                relaxer.apply(native_pose)
-                native_pose.dump_pdb(dump_relaxed_file)
-            self.comm.Barrier()
+            dump_relaxed_file = "%s/relaxed_pdb_%d.pdb" % (scratch_dir, self.rank)
+            relaxer = ClassicRelax()
+            relaxer.set_scorefxn(pyrt.get_fa_scorefxn())
+            relaxer.apply(native_pose)
+            native_pose.dump_pdb(dump_relaxed_file)
+
             new_native_pose = pyr.pose_from_pdb(dump_relaxed_file)
             native_fpose = native_fpose.duplicate_nochange_new_pose(new_native_pose)
             native_pose = new_native_pose
-            final_native_dumped_file = dump_relaxed_file
 
-        close_contacts, close_contacts_zero, contacts_scores = determine_close_residues_from_file(final_native_dumped_file, probability_cutoff=pcutoff, radius_cutoff=rcutoff)
+        native_fpose.dump_to_pdb(final_dump_file)
+
+        close_contacts, close_contacts_zero, contacts_scores =  determine_close_residues_from_file(final_dump_file, probability_cutoff=pcutoff, radius_cutoff=rcutoff)
         #debug
         #print native_pose.sequence()
         #raise
@@ -186,15 +283,41 @@ class BookKeeper(object):
         single_residue_count[np.where(single_residue_count == 0)] = 1000000
         single_residue_avg_E = single_residue_tot_E / single_residue_count
 
-        self.native_pose = native_pose
-        self.native_fpose = native_fpose
-        self.scorefxn_custom = scorefxn_custom
-        self.order = order
-        self.weights = weights
-        self.close_contacts = close_contacts
-        self.scratch_dir = scratch_dir
-        self.native_pair_E = native_pair_E
-        self.single_residue_avg_E = single_residue_avg_E
+        np.save("%s/native_pair_E_index%d" % (scratch_dir, native_index), native_pair_E)
+        np.save("%s/single_residue_avg_E_index%d" % (scratch_dir, native_index), single_residue_avg_E)
+
+        np.save("%s/close_contacts_zero_index%d" % (scratch_dir, native_index), close_contacts_zero)
+
+
+    def process_close_contacts(self, close_contacts_zero):
+        # close_contacts_zero is zero-indexed
+        this_contacts = np.zeros((self.nresidues,self.nresidues))
+        for thing in close_contacts_zero:
+            i = thing[0]
+            j = thing[1]
+            self.close_contacts_array[i,j] = 1
+            self.close_contacts_array[j,i] = 1
+            this_contacts[i,j] = 1
+            this_contacts[j,i] = 1
+
+        self.all_close_contacts_arrays.append(this_contacts)
+
+        self.close_contacts = []
+        for idx in range(self.nresidues):
+            for jdx in range(idx+1, self.nresidues):
+                if self.close_contacts_array[idx,jdx] == 1:
+                    self.close_contacts.append([idx+1, jdx+1]) # this has to be 1-indexed
+
+    def get_possible_native(self, idx, jdx):
+        #idx and jdx are 0-indexed
+        native_check = [val[idx,jdx] for val in self.all_close_contacts_arrays]
+
+        good_natives = []
+        for structure, check in zip(self.all_native_pose, native_check):
+            if check == 1:
+                good_natives.append(structure)
+
+        return good_natives
 
     def initialize_rosetta(self, verbose=False):
         comm = MPI.COMM_WORLD
@@ -217,8 +340,9 @@ class BookKeeper(object):
         new_pair_E = np.zeros((size,size))
         for i in range(np.shape(data)[0]):
             for j in range(np.shape(data)[1]):
-                idx = self.native_fpose.current_indices[i]
-                jdx = self.native_fpose.current_indices[j]
+                # TODO save curent_indices for all native_fpose
+                idx = self.native_fpose_current_indices[i]
+                jdx = self.native_fpose_current_indices[j]
                 value = data[i,j]
 
                 new_pair_E[idx, jdx] = value
@@ -229,7 +353,7 @@ class BookKeeper(object):
         # re-map the final matrix to new dimensions
         new_sing_E = np.zeros(size)
         for i in range(np.shape(data)[0]):
-            idx = self.native_fpose.current_indices[i]
+            idx = self.native_fpose_current_indices[i]
             value = data[i]
 
             new_sing_E[idx] = value
@@ -247,8 +371,8 @@ class BookKeeper(object):
         info_str += "nresidues = %0.2f \n" % (self.nresidues)
         info_str += "use_hbonds = %s \n" % (str(self.use_hbonds))
         info_str += "relax_native = %s \n" % (str(self.relax_native))
-        info_str += "mutation_list = %s \n" % (str(self.native_fpose.mutation_list))
-        info_str += "deletion_ranges = %s \n" % (str(self.native_fpose.deletion_ranges))
+        info_str += "mutation_list = %s \n" % (str(self.native_fpose_mutation_list))
+        info_str += "deletion_ranges = %s \n" % (str(self.native_fpose_deletion_ranges))
 
         return info_str
 
@@ -261,12 +385,13 @@ class BookKeeper(object):
         f.close()
 
         # dump a copy of this particular native.pdb file for future reference
-        self.native_fpose.dump_to_pdb("%s/native.pdb" % (self.savedir))
+        for idx,native_fpose in enumerate(self.all_native_fpose):
+            native_fpose.dump_to_pdb("%s/native_%d.pdb" % (self.savedir, idx))
 
     def save_results(self, decoy_avg, decoy_sd):
         self.decoy_avg = decoy_avg
         self.decoy_sd = decoy_sd
-        true_size = self.native_fpose.old_nresidues
+        true_size = self.true_size
 
         if self.rank == 0:
             np.savetxt("%s/native_pairwise.dat" % self.savedir, self.remap_pairE(self.native_pair_E, true_size))
@@ -332,16 +457,15 @@ class BookKeeper(object):
 class BookKeeperSingleResidue(BookKeeper):
     pass
 
-    def prepare_simulations(self):
-        super(BookKeeperSingleResidue, self).prepare_simulations()
-
-        self.single_residue_energy = np.sum(native_pair_E, axis=0)
+    def initialize_average_results(self):
+        super(BookKeeperSingleResidue, self).initialize_average_results()
+        self.single_residue_energy = np.sum(self.native_pair_E, axis=0)
 
     def remap_pairE(self, data, size):
         # re-map the final matrix to new dimensions
         new_pair_E = np.zeros((size))
         for i in range(np.shape(data)[0]):
-            idx = self.native_fpose.current_indices[i]
+            idx = self.native_fpose_current_indices[i]
             value = data[i]
 
             new_pair_E[idx] = value
@@ -351,7 +475,7 @@ class BookKeeperSingleResidue(BookKeeper):
     def save_results(self, decoy_avg, decoy_sd):
         self.decoy_avg = decoy_avg
         self.decoy_sd = decoy_sd
-        true_size = self.native_fpose.old_nresidues
+        true_size = self.true_size
 
         if self.rank == 0:
             np.savetxt("%s/native_singleresidue.dat" % self.savedir, self.remap_pairE(self.single_residue_energy, true_size))
@@ -373,18 +497,16 @@ def redo_compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=
         mutational_procedure_name = "Mutational Frustration"
         Constructor = ConstructMutationalMPI
         Runner = ComputePairMPI
-    pose = book_keeper.native_pose
-    fpose = book_keeper.native_fpose
     scorefxn = book_keeper.scorefxn_custom
     order = book_keeper.order
     weights = book_keeper.weights
-    nresidues = fpose.nresidues
+    nresidues = book_keeper.final_nresidues
 
     analysis_object = Constructor(nresidues, use_contacts=use_contacts, contacts_scores=contacts_scores)
 
     analyze_pairs = analysis_object.inputs_collected
     n_analyze = len(analyze_pairs)
-    new_computer = Runner(rank, analyze_pairs, pose, scorefxn, order, weights, ndecoys, nresidues, pack_radius=pack_radius, mutation_scheme=mutation_scheme, remove_high=remove_high, compute_all_neighbors=compute_all_neighbors)
+    new_computer = Runner(rank, analyze_pairs, book_keeper, scorefxn, order, weights, ndecoys, nresidues, pack_radius=pack_radius, mutation_scheme=mutation_scheme, remove_high=remove_high, compute_all_neighbors=compute_all_neighbors)
 
     job_indices = get_mpi_jobs(n_analyze, rank, size)
     new_computer.run(job_indices)
@@ -423,8 +545,6 @@ def redo_compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=
 
         print "THE END"
 
-
-
 def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None, compute_all_neighbors=False, save_pairs=None, save_residues=None, use_compute_single_residue=False):
     comm = MPI.COMM_WORLD
 
@@ -440,18 +560,16 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
         mutational_procedure_name = "Mutational Frustration"
         Constructor = ConstructMutationalMPI
         Runner = ComputePairMPI
-    pose = book_keeper.native_pose
-    fpose = book_keeper.native_fpose
     scorefxn = book_keeper.scorefxn_custom
     order = book_keeper.order
     weights = book_keeper.weights
-    nresidues = fpose.nresidues
+    nresidues = book_keeper.final_nresidues
 
     analysis_object = Constructor(nresidues, use_contacts=use_contacts, contacts_scores=contacts_scores)
 
     analyze_pairs = analysis_object.inputs_collected
     n_analyze = len(analyze_pairs)
-    new_computer = Runner(rank, analyze_pairs, pose, scorefxn, order, weights, ndecoys, nresidues, pack_radius=pack_radius, mutation_scheme=mutation_scheme, remove_high=remove_high, compute_all_neighbors=compute_all_neighbors)
+    new_computer = Runner(rank, analyze_pairs, book_keeper, scorefxn, order, weights, ndecoys, nresidues, pack_radius=pack_radius, mutation_scheme=mutation_scheme, remove_high=remove_high, compute_all_neighbors=compute_all_neighbors)
 
     job_indices = get_mpi_jobs(n_analyze, rank, size)
     new_computer.run(job_indices)
@@ -492,19 +610,17 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
                     np.savetxt("%s/decoy_E_list_%d-%d.npy" % (book_keeper.savedir, pair[0], pair[1]), all_e_list[pair[0]-1][pair[1]-1])
 
         mut_info = "Mutational Frustration Computed with: %s \n" % (mutational_procedure_name)
-        mut_info += "ndecoys = %d" % ndecoys
-        mut_info += "pack_radius = %g" % pack_radius
-        mut_info += "scheme = %s" % mutation_scheme
-        mut_info += "use_contacts = %s" % str(use_contacts)
-        mut_info += "contacts_scores = %s" % str(contacts_scores)
-        mut_info += "remove_high = %s" % (str(remove_high))
-        mut_info += "compute_all_neighbors = %s" % (str(compute_all_neighbors))
+        mut_info += "ndecoys = %d \n" % ndecoys
+        mut_info += "pack_radius = %g \n" % pack_radius
+        mut_info += "scheme = %s \n" % mutation_scheme
+        mut_info += "use_contacts = %s \n" % str(use_contacts)
+        mut_info += "contacts_scores = %s \n" % str(contacts_scores)
+        mut_info += "remove_high = %s \n" % (str(remove_high))
+        mut_info += "compute_all_neighbors = %s \n" % (str(compute_all_neighbors))
 
         book_keeper.save_basic_info(info=mut_info)
 
         print "THE END"
-
-
 
 def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, pcutoff=0.8, native_contacts=None, use_contacts=None, contacts_scores=None, use_config_individual_pairs=False, min_use=10, save_pairs=None, save_residues=None, remove_high=None, count_all_similar=False, use_compute_single_residue=False):
     comm = MPI.COMM_WORLD
@@ -516,8 +632,8 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
     order = book_keeper.order
     weights = book_keeper.weights
     scratch_dir = book_keeper.scratch_dir
-    native_fpose = book_keeper.native_fpose
-    nresidues = native_fpose.nresidues
+    native_fpose = book_keeper.all_native_fpose[0]
+    nresidues = book_keeper.final_nresidues
 
     if rank == 0:
         use_verbose = True

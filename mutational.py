@@ -78,8 +78,11 @@ class ConstructMutationalMPI(object):
             zjdx = jdx - 1
 
             self.E_avg[zidx, zjdx] = average
+            self.E_avg[zjdx, zidx] = average
             self.E_sd[zidx, zjdx] = sd
+            self.E_sd[zjdx, zidx] = sd
             self.all_e_list[idx-1][jdx-1] = e_list
+            self.all_e_list[jdx-1][idx-1] = e_list
         if self.verbose:
             print "Completed %d saves" % count
 
@@ -91,13 +94,13 @@ class ConstructMutationalMPI(object):
         return self.all_e_list
 
 class ComputePairMPI(object):
-    def __init__(self, thread_number, pair_list, native_pose, scorefxn, order, weights, ndecoys, nresidues, pack_radius=10., mutation_scheme="simple", remove_high=None, compute_all_neighbors=False):
+    def __init__(self, thread_number, pair_list, book_keeper, scorefxn, order, weights, ndecoys, nresidues, pack_radius=10., mutation_scheme="simple", remove_high=None, compute_all_neighbors=False):
         self.thread_number = thread_number
         print "Thread %d Starting" % self.thread_number
 
         self.pair_list = pair_list
         self.save_q = []
-        self.native_pose = native_pose
+        self.book_keeper = book_keeper
         self.scorefxn = scorefxn
         self.order = order
         self.weights = weights
@@ -107,11 +110,14 @@ class ComputePairMPI(object):
         self.still_going = True # default action is to keep going
         self.start_time = time.time()
         self.n_jobs_run = 0
-        self.possible_residues = get_possible_residues(self.native_pose)
+        self.possible_residues = get_possible_residues(self.book_keeper.all_native_pose[0])
 
         self.remove_high = remove_high
         self.compute_all_neighbors = compute_all_neighbors
-
+        self.current_native_set = None
+        self.current_idx = -1
+        self.current_jdx = -1
+        self.size_of_native_set = -1
         random.seed(int(time.time()) + int(self.thread_number*1000))
 
         if mutation_scheme == "simple":
@@ -131,6 +137,16 @@ class ComputePairMPI(object):
 
     def _extra_init(self):
         pass
+
+    def get_native_pose(self, idx, jdx):
+        # idx and jdx are 1-indexed
+        if self.current_idx != idx and self.current_jdx != jdx:
+            self.current_native_set = self.book_keeper.get_possible_native(idx-1, jdx-1)
+            self.current_idx = idx
+            self.current_jdx = jdx
+            self.size_of_native_set = len(self.current_native_set)
+
+        return self.current_native_set[np.random.choice(self.size_of_native_set)]
 
     def check_unique_mutated_residue_byidx(self, old_indices, new_residues):
         old_residues = []
@@ -171,7 +187,7 @@ class ComputePairMPI(object):
     def mutate_residue_pair(self, idx, jdx, possible_residues):
         new_res1, new_res2 = self.select_new_pair(idx, jdx, possible_residues)
         new_pose = Pose()
-        new_pose.assign(self.native_pose)
+        new_pose.assign(self.get_native_pose(idx,jdx))
         mutate_residue(new_pose, idx, new_res1, pack_radius=0)
         mutate_residue(new_pose, jdx, new_res2, pack_radius=0)
         return new_pose
@@ -187,7 +203,7 @@ class ComputePairMPI(object):
     def mutate_repack(self, idx, jdx, possible_residues):
         new_res1, new_res2 = self.select_new_pair(idx, jdx, possible_residues)
         new_pose = Pose()
-        new_pose.assign(self.native_pose)
+        new_pose.assign(self.get_native_pose(idx,jdx))
         mutate_residue(new_pose, idx, new_res1, pack_radius=0)
         mutate_residue(new_pose, jdx, new_res2, pack_radius=50)
         """
@@ -203,7 +219,7 @@ class ComputePairMPI(object):
     def mutate_simple(self, idx, jdx, possible_residues):
         new_res1, new_res2 = self.select_new_pair(idx, jdx, possible_residues)
         new_pose = Pose()
-        new_pose.assign(self.native_pose)
+        new_pose.assign(self.get_native_pose(idx,jdx))
         mutate_residue(new_pose, idx, new_res1, pack_radius=self.pack_radius)
         mutate_residue(new_pose, jdx, new_res2, pack_radius=self.pack_radius)
 
@@ -212,7 +228,7 @@ class ComputePairMPI(object):
     def mutate_simple_single(self, idx, possible_residues):
         new_res1 = self.select_new_single(idx, possible_residues)
         new_pose = Pose()
-        new_pose.assign(self.native_pose)
+        new_pose.assign(self.get_native_pose(idx,jdx))
         mutate_residue(new_pose, idx, new_res1, pack_radius=self.pack_radius)
         """
 

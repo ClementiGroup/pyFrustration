@@ -75,6 +75,7 @@ def compute_pairwise(pose, scorefxn, order, weights, nresidues=35, use_contacts=
         for thing,wt in zip(order,weights):
             this_E += emap[thing] * wt
         pair_E[idx-1, jdx-1] = this_E
+        pair_E[jdx-1, idx-1] = this_E
     #assert (total_E - np.sum(pair_E)) < 0.01
 
     return pair_E
@@ -112,6 +113,7 @@ def compute_pairwise_allinteractions(pose, scorefxn, order, weights, nresidues=3
             this_E += emap[thing] * wt
 
         pair_E[idx-1, jdx-1] = this_E
+        pair_E[jdx-1, idx-1] = this_E
     #assert (total_E - np.sum(pair_E)) < 0.01
 
     return pair_E

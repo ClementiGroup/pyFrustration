@@ -49,13 +49,17 @@ class ConstructConfigurationalMPI(object):
             for idx in range(self.nresidues):
                 for jdx in range(self.nresidues):
                     self.E_avg[idx, jdx] = avg
+                    self.E_avg[jdx, idx] = avg
                     self.E_sd[idx, jdx] = std
+                    self.E_sd[jdx, idx] = std
         else:
             for i_count in range(len(self.native_contacts)):
                 idx = self.native_contacts[i_count][0]
                 jdx = self.native_contacts[i_count][1]
                 self.E_avg[idx, jdx] = avg
+                self.E_avg[jdx, idx] = avg
                 self.E_sd[idx, jdx] = std
+                self.E_sd[jdx, idx] = std
 
     def process_results_q(self, results_q):
         # take a queue as input, and then analyze the results
@@ -228,7 +232,9 @@ class ConstructConfigIndividualMPI(ConstructConfigurationalMPI):
 
     def assign_E_results(self, idx, jdx, avg, std):
         self._E_avg[idx, jdx] = avg
+        self._E_avg[jdx, idx] = avg
         self._E_sd[idx, jdx] = std
+        self._E_sd[jdx, idx] = std
 
     def append_all_similar(self, idx, jdx, E):
         total_counts = 0

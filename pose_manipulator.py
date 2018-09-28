@@ -35,6 +35,25 @@ class FrusPose(object):
             for deletion in deletion_ranges:
                 self._delete_region(deletion)
 
+    def add_change_history(self, mutation_list=None, deletion_ranges=None):
+        if mutation_list is not None:
+            for mutation in mutation_list:
+                mut_idx = mutation[0]
+                new_res = mutation[1]
+                if self.mutation_list is None:
+                    self.mutation_list = [[mut_idx, new_res]]
+                else:
+                    self.mutation_list.append([mut_idx, new_res])
+
+        if deletion_ranges is not None:
+            for deletion in deletion_ranges:
+                start = deletion[0]
+                end = deletion[1]
+                if self.deletion_ranges is None:
+                    self.deletion_ranges = [[start, end]]
+                else:
+                    self.deletion_ranges.append([start, end])
+
     def _mutate_residue(self, mut_idx, new_res, repack_radius):
         mutate_residue(self.pose, mut_idx, new_res, pack_radius=repack_radius)
         if self.mutation_list is None:
