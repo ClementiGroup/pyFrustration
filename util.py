@@ -14,6 +14,8 @@ from pyrosetta.toolbox import cleanATOM
 from pyrosetta.toolbox import get_secstruct
 from pyrosetta.toolbox import mutate_residue
 from pyrosetta import teaching as pyrt
+from pyrosetta import standard_packer_task
+from pyrosetta.rosetta.protocols.simple_moves import PackRotamersMover
 
 import mdtraj as md
 

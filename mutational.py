@@ -50,13 +50,13 @@ class ConstructMutationalMPI(object):
     def _initialize_empty_results(self):
         self.E_avg = np.zeros((self.nresidues, self.nresidues))
         self.E_sd = np.zeros((self.nresidues, self.nresidues))
+        self.all_e_list = [[[] for i in range(self.nresidues)] for j in range(self.nresidues)]
 
     def process_results_q(self, results_q):
         # take a queue as input, and then analyze the results
 
         count = 0
         print_every = ((self.nresidues) ** 2 ) / 20
-        self.all_e_list = [[[] for i in range(self.nresidues)] for j in range(self.nresidues)]
 
         for results in results_q:
             if self.verbose and (count % print_every == 0):
@@ -331,6 +331,7 @@ class ConstructMutationalSingleMPI(ConstructMutationalMPI):
     def _initialize_empty_results(self):
         self.E_avg = np.zeros(self.nresidues)
         self.E_sd = np.zeros(self.nresidues)
+        self.all_e_list = [[] for i in range(self.nresidues)]
 
     def _convert_parameters_into_list(self):
         all_indices = []
@@ -346,7 +347,6 @@ class ConstructMutationalSingleMPI(ConstructMutationalMPI):
 
         count = 0
         print_every = ((self.nresidues) ** 2 ) / 20
-        self.all_e_list = [[] for i in range(self.nresidues)]
 
         for results in results_q:
             if self.verbose and (count % print_every == 0):

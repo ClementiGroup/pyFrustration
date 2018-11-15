@@ -38,7 +38,7 @@ def compute_gaussian_and_chi(decoyE, spacing=0.2):
     return chi, avg, sd
 
 class BookKeeper(object):
-    def __init__(self, native_file, nresidues, savedir=None, use_hbonds=False, relax_native=False, rcutoff=0.6, pcutoff=0.8, mutate_traj=None, delete_traj=None, repack_radius=10, compute_all_neighbors=False, min_use=0):
+    def __init__(self, native_file, nresidues, savedir=None, use_hbonds=False, relax_native=False, repack_sidechains=False, rcutoff=0.6, pcutoff=0.8, mutate_traj=None, delete_traj=None, repack_radius=10, compute_all_neighbors=False, min_use=0, close_contact_probability=0.1):
         self.native_file = native_file
         if savedir is None:
             savedir = os.getcwd()
@@ -46,6 +46,7 @@ class BookKeeper(object):
         self.savedir = savedir
         self.use_hbonds = use_hbonds
         self.relax_native = relax_native
+        self.repack_sidechains = repack_sidechains
         self.rcutoff = rcutoff
         self.pcutoff = pcutoff
         self.nresidues = nresidues
@@ -55,6 +56,7 @@ class BookKeeper(object):
         self.repack_radius = repack_radius
         self.compute_all_neighbors = compute_all_neighbors
         self.min_use = min_use
+        self.close_contact_probability = close_contact_probability
 
         self.decoy_avg = None
         self.decoy_sd = None
@@ -66,6 +68,9 @@ class BookKeeper(object):
 
         native_trajs = md.load(native_file)
         self.n_native_structures = native_trajs.n_frames
+
+        if self.repack_sidechains and self.relax_native:
+            print "Warnining, repacking side chains and relaxing the native structures is generally redundant. The resultant states will most likely be identical to a relaxed native state"
 
         self.initialize_basic()
         if self.size > self.n_native_structures:
@@ -202,12 +207,14 @@ class BookKeeper(object):
 
         # residue pairs in close proximity in any frame
         self.close_contacts = [] # 1-indexed for later (because of rosetta)
+        self.close_contacts_frequent = [] # 1-indexed for later (because of rosetta)
         self.close_contacts_array = np.zeros((self.nresidues,self.nresidues))
         # list of 1-0 arrays denoting close residue pairs in each frame.
         self.all_close_contacts_arrays = []
 
     def prepare_simulations(self, native_file, native_index):
         relax_native = self.relax_native
+        repack_sidechains = self.repack_sidechains
         rcutoff = self.rcutoff
         pcutoff = self.pcutoff
         nresidues = self.nresidues
@@ -236,6 +243,20 @@ class BookKeeper(object):
             native_fpose = native_fpose.duplicate_nochange_new_pose(new_native_pose)
 
             native_pose = new_native_pose
+
+        if repack_sidechains:
+            dump_repack_file = "%s/repack_pdb_%d.pdb" % (scratch_dir, self.rank)
+
+            task_pack = standard_packer_task(native_pose)
+            task_pack.restrict_to_repacking()
+            pack_mover = PackRotamersMover(pyrt.get_fa_scorefxn())
+            pack_mover.apply(native_pose)
+            native_pose.dump_pdb(dump_repack_file)
+
+            new_native_pose = pyr.pose_from_pdb(dump_repack_file)
+            native_fpose = native_fpose.duplicate_nochange_new_pose(new_native_pose)
+            native_pose = new_native_pose
+
 
         if relax_native:
             #raise IOError("Option is not implemented for multiple threads or multiple mutations/deletions")
@@ -295,18 +316,21 @@ class BookKeeper(object):
         for thing in close_contacts_zero:
             i = thing[0]
             j = thing[1]
-            self.close_contacts_array[i,j] = 1
-            self.close_contacts_array[j,i] = 1
+            self.close_contacts_array[i,j] += 1
+            self.close_contacts_array[j,i] += 1
             this_contacts[i,j] = 1
             this_contacts[j,i] = 1
 
         self.all_close_contacts_arrays.append(this_contacts)
 
         self.close_contacts = []
+        self.close_contacts_frequent = []
         for idx in range(self.nresidues):
             for jdx in range(idx+1, self.nresidues):
-                if self.close_contacts_array[idx,jdx] == 1:
+                if self.close_contacts_array[idx,jdx] >= 1:
                     self.close_contacts.append([idx+1, jdx+1]) # this has to be 1-indexed
+                if self.close_contacts_array[idx,jdx] >= self.n_native_structures * self.close_contact_probability:
+                    self.close_contacts_frequent.append([idx+1, jdx+1])
 
     def get_possible_native(self, idx, jdx):
         #idx and jdx are 0-indexed
@@ -396,6 +420,7 @@ class BookKeeper(object):
         if self.rank == 0:
             np.savetxt("%s/native_pairwise.dat" % self.savedir, self.remap_pairE(self.native_pair_E, true_size))
             np.savetxt("%s/native_single_residue.dat" % self.savedir, self.remap_singleE(self.single_residue_avg_E, true_size))
+            np.savetxt("%s/native_close_contacts.dat" % self.savedir, self.close_contacts_array.astype(float)/float(self.n_native_structures))
 
             if decoy_avg.ndim == 2:
                 np.savetxt("%s/decoy_avg.dat" % self.savedir, self.remap_pairE(decoy_avg, true_size))
@@ -550,6 +575,9 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
 
     rank = comm.Get_rank()
     size = comm.Get_size()
+
+    if rank == 0:
+        print "There are %d close contacts" % np.shape(use_contacts)[0]
 
     if use_compute_single_residue:
         print "Using Single Residue Mode"
