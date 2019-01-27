@@ -327,6 +327,77 @@ class ComputePairMPI(object):
 
         return
 
+class ComputePairMPIControl(ComputePairMPI):
+
+    def mutate_residues_control(self, idx, jdx, this_native_pose):
+
+        new_pose = Pose()
+        new_pose.assign(this_native_pose)
+        original_sequence = new_pose.sequence()
+
+        new_res1 = original_sequence[idx - 1]
+        new_res2 = original_sequence[jdx - 1]
+
+        mutate_residue(new_pose, idx, new_res1, pack_radius=self.pack_radius)
+        mutate_residue(new_pose, jdx, new_res2, pack_radius=self.pack_radius)
+        return new_pose
+
+    def run(self, list_of_index):
+        self.still_going = True
+        for index in list_of_index:
+            new_E = None
+            if self.n_jobs_run % 10 == 0:
+                # print what step you are on
+                enable_print()
+                self.print_status()
+                block_print()
+
+            new_params = self.pair_list[index]
+            idx = new_params["idx"] # 1-indexed
+            jdx = new_params["jdx"] # 1-indexed
+            i_decoy = 0
+
+            this_native_set = self.book_keeper.get_possible_native(idx-1, jdx-1)
+            n_in_current_native_set = len(this_native_set)
+            all_E = []
+
+            for i_decoy in range(n_in_current_native_set):
+                this_native_pose = this_native_set[i_decoy]
+                new_pose = self.mutate_residues_control(idx, jdx, this_native_pose)
+                assert new_pose.sequence() == this_native_pose.sequence()
+                emap = pyrt.EMapVector()
+                if self.compute_all_neighbors:
+                    this_E = self._determine_all_pairs(new_pose, idx, jdx)
+                else:
+                    this_E = self._determine_single_pair(new_pose, idx, jdx)
+
+                if self.remove_high is None:
+                    all_E.append(this_E)
+                    i_decoy += 1
+                else:
+                    if this_E < self.remove_high:
+                        all_E.append(this_E)
+            assert len(all_E) > 0
+            new_E = np.array(all_E)
+            """
+            # this removes after the fact, but means hundreds of decoys can be missing
+            if self.remove_high is not None:
+                temp_E = np.array(all_E)
+                new_E = temp_E[np.where(temp_E < self.remove_high)]
+            else:
+                new_E = all_E
+            """
+            this_avg, this_std = compute_average_and_sd(new_E)
+            self.save_q.append({"idx":idx, "jdx":jdx, "average":this_avg, "sd":this_std, "elist":new_E})
+            #self.save_q.put([idx, jdx, this_avg, this_std])
+
+            self.n_jobs_run += 1
+
+        self.still_going = False
+        enable_print()
+
+        return
+
 class ConstructMutationalSingleMPI(ConstructMutationalMPI):
     def _initialize_empty_results(self):
         self.E_avg = np.zeros(self.nresidues)

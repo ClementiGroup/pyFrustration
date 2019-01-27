@@ -120,6 +120,13 @@ def compute_pairwise_allinteractions(pose, scorefxn, order, weights, nresidues=3
 
     return pair_E
 
+def compute_standard_rosetta_energy(pose):
+    scorefxn = pyrt.get_fa_scorefxn()
+    total_e = scorefxn(pose)
+
+    return total_e
+
+
 def get_possible_residues(pose):
     all_residues = ["G", "A", "V", "L", "I", "M", "F", "W", "P", "S", "T", "C", "Y", "N", "Q", "D", "E", "K", "R", "H"]
     sequence = pose.sequence()

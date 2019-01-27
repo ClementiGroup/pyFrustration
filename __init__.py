@@ -1,5 +1,6 @@
-from mutational import ConstructMutationalMPI, ComputePairMPI
+from mutational import ConstructMutationalMPI, ComputePairMPI, ComputePairMPIControl
+
 from configurational import ConstructConfigurationalMPI, ComputeConfigMPI, ConstructConfigIndividualMPI, ComputeConfigIndividualMPI, ConstructConfigSingleResidueMPI, ComputeConfigSingleResidueMPI
 from pose_manipulator import FrusPose
 
-from helper_functions import BookKeeper, compute_configurational_pairwise_mpi, compute_mutational_pairwise_mpi, redo_compute_mutational_pairwise_mpi
+from helper_functions import BookKeeper, compute_configurational_pairwise_mpi, compute_mutational_pairwise_mpi, redo_compute_mutational_pairwise_mpi, compute_new_low_energy_sequences

@@ -1,5 +1,5 @@
 from .util import *
-from .mutational import ConstructMutationalMPI, ComputePairMPI, ConstructMutationalSingleMPI, ComputeSingleMPI
+from .mutational import ConstructMutationalMPI, ComputePairMPI, ComputePairMPIControl, ConstructMutationalSingleMPI, ComputeSingleMPI
 from .configurational import ConstructConfigurationalMPI, ComputeConfigMPI, ConstructConfigIndividualMPI, ComputeConfigIndividualMPI, ConstructConfigSingleResidueMPI, ComputeConfigSingleResidueMPI
 from .pose_manipulator import FrusPose
 import datetime
@@ -132,8 +132,8 @@ class BookKeeper(object):
             if self.final_nresidues is None:
                 self.final_nresidues = native_fpose.nresidues
 
-        self.native_pair_E = np.zeros((self.nresidues,self.nresidues))
-        self.single_residue_avg_E = np.zeros((self.nresidues))
+        self.native_pair_E = np.zeros((native_fpose.nresidues,native_fpose.nresidues))
+        self.single_residue_avg_E = np.zeros((native_fpose.nresidues))
         for i in range(self.n_native_structures):
             self.native_pair_E += self.all_native_pair_E[i]
             self.single_residue_avg_E += self.all_single_residue_avg_E[i]
@@ -570,7 +570,7 @@ def redo_compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=
 
         print "THE END"
 
-def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None, compute_all_neighbors=False, save_pairs=None, save_residues=None, use_compute_single_residue=False):
+def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None, compute_all_neighbors=False, save_pairs=None, save_residues=None, use_compute_single_residue=False, use_mutational_control=False):
     comm = MPI.COMM_WORLD
 
     rank = comm.Get_rank()
@@ -584,6 +584,10 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
         mutational_procedure_name = "Mutational Single Residue"
         Constructor = ConstructMutationalSingleMPI
         Runner = ComputeSingleMPI
+    elif use_mutational_control:
+        mutational_procedure_name = "Mutational Control Frustration"
+        Constructor = ConstructMutationalMPI
+        Runner = ComputePairMPIControl
     else:
         mutational_procedure_name = "Mutational Frustration"
         Constructor = ConstructMutationalMPI
@@ -767,3 +771,92 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
         book_keeper.save_basic_info(info=config_info)
 
         print "finished saving individual pairs and chi2 results"
+
+def compute_new_low_energy_sequences(book_keeper, mutate_residues, number_residues_to_mutate, n_mutations_per_thread=10):
+    comm = MPI.COMM_WORLD
+
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+
+    n_residues_could_mutate = len(mutate_residues)
+    all_avg_mutated_E = []
+    all_mutations = []
+    all_n_selected = []
+    n_native = book_keeper.n_native_structures
+    possible_residues = get_possible_residues(book_keeper.all_native_pose[0])
+
+    # calculate the initial energy
+    total_E = 0
+    for fp in book_keeper.all_native_fpose:
+        new_pose = Pose()
+        new_pose.assign(fp.pose)
+        new_fpose = fp.duplicate_nochange_new_pose(new_pose)
+        e = compute_standard_rosetta_energy(new_fpose.pose)
+        total_E += e
+    avg_initial_E = total_E / n_native
+
+    # do the mutations
+    t1 = time.time()
+    for i in range(n_mutations_per_thread):
+        total_E = 0
+        n_select_this_round = int((np.random.randn()* np.sqrt(n_residues_could_mutate)) + number_residues_to_mutate)
+        print n_select_this_round
+        # make sure its valid:
+        if n_select_this_round >= n_residues_could_mutate:
+            n_select_this_round = n_residues_could_mutate
+        elif n_select_this_round <= 0:
+            n_select_this_round = number_residues_to_mutate
+        this_residue_targets = np.random.choice(mutate_residues, size=n_select_this_round, replace=False)
+        mutation_values = np.random.choice(possible_residues, size=n_select_this_round, replace=True)
+
+        mutation_packet = []
+        for res,mut in zip(this_residue_targets, mutation_values):
+            mutation_packet.append([res,mut])
+
+        for fp in book_keeper.all_native_fpose:
+            new_pose = Pose()
+            new_pose.assign(fp.pose)
+            new_fpose = fp.duplicate_nochange_new_pose(new_pose)
+            new_fpose.modify_protein(mutation_packet)
+            e = compute_standard_rosetta_energy(new_fpose.pose)
+            total_E += e
+
+        avg_E = total_E / n_native
+        all_avg_mutated_E.append(avg_E)
+        all_mutations.append(mutation_packet)
+
+    t2 = time.time()
+    print "Time To Actually Run is %f seconds" % (t1-t2)
+
+    if rank == 0:
+        f = open("%s/info.txt" % book_keeper.savedir, "w")
+        f.write("Initial E = %f\n" % avg_initial_E)
+        f.close()
+
+        final_avg_mutated_E = all_avg_mutated_E
+        final_mutations_list = all_mutations
+        for i in range(1, size):
+            aame = comm.recv(source=i, tag=2)
+            am = comm.recv(source=i, tag=3)
+            for thing in aame:
+                final_avg_mutated_E.append(thing)
+            for thing in am:
+                final_mutations_list.append(thing)
+    else:
+        comm.send(all_avg_mutated_E, dest=0, tag=2)
+        comm.send(all_mutations, dest=0, tag=3)
+
+    if rank == 0:
+        sorted_indices = np.argsort(final_avg_mutated_E)
+
+        f = open("%s/sorted_energies.txt" % book_keeper.savedir, "w")
+        w = open("%s/sorted_mutations.txt" % book_keeper.savedir, "w")
+
+        for idx in sorted_indices:
+            f.write("%f \n" % final_avg_mutated_E[idx])
+            for lval in final_mutations_list[idx]:
+                w.write("%d %s " % (lval[0], lval[1]))
+            w.write("\n")
+
+        f.close()
+        w.close()
