@@ -73,7 +73,7 @@ class BookKeeper(object):
             The radius-cutoff in nanometers. Pairwise energies are computed
             between pairs of residues with closest heavy atom distance < rcutoff
         pcutoff (float): 0.8
-            Used in determine_close_residues_from_file().
+            Used in determine_close_residues_from_file(). Likely deprecated.
         mutate_traj (list, [int, str]): None
             Mx2 list where M is the number of sequence mutations. The first
             column gives the residue index (1-indexed) that you would like to
@@ -669,10 +669,18 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
     compute_all_neighbors (bool): False
         If True, include all nearby residues when computing the pairwise
         energy. Otherwise, include only the pair-interaction.
-    save_pairs
-    save_residues
-    use_compute_single_residue
-    use_mutational_control
+    save_pairs (list, [int, int]): None
+        Residue pairs for which decoy energy distributions should be saved. The
+        list is 1-indexed. Only used when not in single-residue mode.
+    save_residues (list, int): None
+        List of residue decoy energy distributions that should be saved. The
+        list is 1-index. Only used when in single-residue mode.
+    use_compute_single_residue (bool): False
+        If True, use single-residue mode. This feature was tested, and needs to
+        be either deprecated or improved in the future.
+    use_mutational_control (bool): False
+        If True, use the control mutation procedure. With the control procedure,
+        the residue pairs are only re-packed, and not mutated.
 
     Returns:
     --------
@@ -766,6 +774,89 @@ def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., 
         print "THE END"
 
 def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, pcutoff=0.8, native_contacts=None, use_contacts=None, contacts_scores=None, use_config_individual_pairs=False, min_use=10, save_pairs=None, save_residues=None, remove_high=None, count_all_similar=False, use_compute_single_residue=False):
+    """ Computing the mutational local frustration
+
+    Use either use_config_individual_pairs or count_all_similar for the
+    Heterogeneous 1 or 2 methods, respectively. Default behavior is to compute
+    the Homogeneous configurational method.
+
+    Args:
+    -----
+    book_keeper (pyFrustration.BookKeeper):
+        BookKeeper object that stores the native structures and the final
+        frustration results.
+    top_file (str):
+        The topology file for loading the configurational_traj_file.
+    configurational_traj_file (str):
+        Location of trajectory file containing the N conformations.
+    configurational_dtraj (array-like, float): None
+        A file containing N-values that partitions the trajectory into different
+        disecrete states (i.e. folded or unfolded)
+    configurational_parameters (dict): {"highcutoff":0.9, "lowcutoff":0.,
+        "stride_length":10, "decoy_r_cutoff":0.5}
+        Values for handling the configurational traj_file for selecting the
+        decoy set of non-native states. If configurational_dtraj is given,
+        frames with dtraj values between "lowcutoff" and "highcutoff" are
+        selected as non-native structures. The "stride_length" will sub-sample
+        the trajectory to reduce the number of total frames to improve the
+        computation time. Only residue pairs with closest heavy atom distances
+        less than "decoy_r_cutoff" are included.
+    pcutoff (float): 0.8
+        Used in determine_close_residues_from_file(), inside the configurational
+        computation objects. Likely deprecated.
+    native_contacts (list, [int, int]): None
+        Only compute the configurational decoy energy between these pairs, list
+        is 0-indexed residues.
+    use_contacts (list, [int, int]): int
+        1-index list of residue pairs to compute the mutational frustration
+        value over.
+    contacts_scores (list, float): None
+        Optional, approximate value for each residue pair that correlates with
+        the approximate computation time. Pairs are sorted onto processors to
+        make the time for each processor more equitable.
+    use_config_individual_pairs (bool): False
+        If True, compute only the interactions between residues i and j when
+        computing the decoy energy E_ij set.
+    min_use (int): 10
+        Only count residue interactions that have min_use number of close
+        interactions in the decoy set.
+    save_pairs (list, [int, int]): None
+        Residue pairs for which decoy energy distributions should be saved. The
+        list is 1-indexed. Only used when not in single-residue mode.
+    save_residues (list, int): None
+        List of residue decoy energy distributions that should be saved. The
+        list is 1-index. Only used when in single-residue mode.
+    remove_high (float): None
+        If not None, remove decoy residue pairs with pairwise energy greater
+        than remove_high.
+    count_all_similar (bool): False
+        If True, count all residue interactions with residues i or j when
+        computing the decoy energy E_ij set.
+    use_compute_single_residue (bool): False
+        If True, use single-residue mode. This feature was tested, and needs to
+        be either deprecated or improved in the future.
+
+    ndecoys (int): 1000
+        Number of decoys to compute for each pair.
+    pack_radius (float): 10.
+        Radius to use for the local repacking procedure.
+    mutation_scheme (str): simple
+        Type of mutation scheme to use for reliving steric collissions. The
+        options are "simple", "repack_all", "relax_all", "single". The "simple"
+        option is the local-repacking option.
+    compute_all_neighbors (bool): False
+        If True, include all nearby residues when computing the pairwise
+        energy. Otherwise, include only the pair-interaction.
+    use_mutational_control (bool): False
+        If True, use the control mutation procedure. With the control procedure,
+        the residue pairs are only re-packed, and not mutated.
+
+    Returns:
+    --------
+    None
+
+
+    """
     comm = MPI.COMM_WORLD
 
     rank = comm.Get_rank()

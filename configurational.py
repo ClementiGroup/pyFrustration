@@ -2,6 +2,7 @@ from .util import *
 
 class ConstructConfigurationalMPI(object):
     def __init__(self, nresidues, top_file, configurational_traj_file, configurational_dtraj=None, configurational_parameters={"highcutoff":0.9, "lowcutoff":0., "stride_length":10, "decoy_r_cutoff":0.5}, verbose=False, native_contacts=None, remove_high=False):
+        """ """
         self.verbose = verbose
         self.nresidues = nresidues
 
@@ -62,8 +63,7 @@ class ConstructConfigurationalMPI(object):
                 self.E_sd[jdx, idx] = std
 
     def process_results_q(self, results_q):
-        # take a queue as input, and then analyze the results
-        # for configurational, anticipate a list of pair energies
+        """ Process each thread's final decoy results and save """
         count = 0
         for results in results_q:
             if self.remove_high is None:
