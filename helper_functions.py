@@ -907,7 +907,7 @@ def compute_configurational_pairwise_mpi(book_keeper, top_file, configurational_
     cwd = os.getcwd()
     os.chdir(scratch_dir)
     for index in job_indices:
-        new_computer.run(index)
+        new_computer.run(job_indices[index])
     os.chdir(cwd)
 
     new_computer.print_status()
