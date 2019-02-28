@@ -16,6 +16,7 @@ def _func_gauss(x, mu, sigma, total=1.):
 
 
 def compute_gaussian_and_chi(decoyE, spacing=0.2):
+    """ Compute a Gaussian fit to the decoy distribution """
 
     n_decoys = float(np.shape(decoyE)[0])
     if n_decoys > 0:
@@ -39,6 +40,75 @@ def compute_gaussian_and_chi(decoyE, spacing=0.2):
 
 class BookKeeper(object):
     def __init__(self, native_file, nresidues, savedir=None, use_hbonds=False, relax_native=False, repack_sidechains=False, rcutoff=0.6, pcutoff=0.8, mutate_traj=None, delete_traj=None, repack_radius=10, compute_all_neighbors=False, min_use=0, close_contact_probability=0.1):
+        """ Object that loads the native states and computes frustration
+
+        BookKeeper loads the native model and keeps track of parameters for
+        redesigning the sequence. For example, when redesigning the sequence, it
+        is useful to be able to keep track of sequence changes so that they can
+        be consistently replicated across the decoys. The parameters for
+        computing the pairwise energies are also given here. The final
+        frustration results are stored in this object.
+
+        Args
+        ----
+        native_file (string):
+            Gives the location for the native file. The native file should be in
+            some mdtraj readable format. Multiple structures in the file would
+            all be treated as alternative native structures.
+        nresidues (int):
+            Number of residues. Should agree with the number of residues in the
+            native structure.
+        savedir (string): None
+            Gives the directory to save the frustration calculation results.
+        use_hbonds (bool): False
+            If True, compute the Hydrogen bonding energy when computing the
+            pairwise energy.
+        relax_native (bool): False
+            If True, perform a ClassicRelax() minimization of all the native
+            structures before computing the native pairwise energy.
+        repack_sidechains (bool): False
+            If True, perform a repacking of all the side-chains before computing
+            the native pairwise energy.
+        rcutoff (float): 0.6
+            The radius-cutoff in nanometers. Pairwise energies are computed
+            between pairs of residues with closest heavy atom distance < rcutoff
+        pcutoff (float): 0.8
+            Used in determine_close_residues_from_file().
+        mutate_traj (list, [int, str]): None
+            Mx2 list where M is the number of sequence mutations. The first
+            column gives the residue index (1-indexed) that you would like to
+            mutate, and the second column gives the 1-letter code for the
+            desired resultant mutant.
+        delete_traj (list, [int, int]): None
+            A Dx2 list where D is the number of regions you would like to delete.
+            The first column gives the start index, and the second column gives
+            the ending index inclusively (both 1-indexed). Thus, residues in
+            range(D[0,0], D[0,1]+1) are deleted.
+        repack_radius (float): 10.
+            When performing a sequence mutation, repack sidechains within the
+            repack_radius.
+        compute_all_neighbors (bool): False
+            If True, include all nearby residues when computing the pairwise
+            energy. Otherwise, include only the pair-interaction.
+        min_use (int): 0
+            Only compute goodness of fit chi^2 when number of decoy energies is
+            greater than min_use.
+        close_contact_probability (float): 0.1
+            Residue pairs that are within rcutoff with at least this probability
+            are added to the close_contacts_frequent parameter.
+
+        Attributes
+        ----------
+        close_contacts (list):
+            1-index list of all residue pairs that occur within rcutoff in at
+            least one of the native structures.
+        close_contacts_frequent (list):
+            1-index list of all residue pairs that occur within rcutoff in at
+            least close_contact_probability * N of the N native structures.
+
+
+        """
+
         self.native_file = native_file
         if savedir is None:
             savedir = os.getcwd()
@@ -571,6 +641,47 @@ def redo_compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=
         print "THE END"
 
 def compute_mutational_pairwise_mpi(book_keeper, ndecoys=1000, pack_radius=10., mutation_scheme="simple", use_contacts=None, contacts_scores=None, remove_high=None, compute_all_neighbors=False, save_pairs=None, save_residues=None, use_compute_single_residue=False, use_mutational_control=False):
+    """ Computing the mutational local frustration
+
+    Args:
+    -----
+    book_keeper (pyFrustration.BookKeeper):
+        BookKeeper object that stores the native structures and the final
+        frustration results.
+    ndecoys (int): 1000
+        Number of decoys to compute for each pair.
+    pack_radius (float): 10.
+        Radius to use for the local repacking procedure.
+    mutation_scheme (str): simple
+        Type of mutation scheme to use for reliving steric collissions. The
+        options are "simple", "repack_all", "relax_all", "single". The "simple"
+        option is the local-repacking option.
+    use_contacts (list, [int, int]): int
+        1-index list of residue pairs to compute the mutational frustration
+        value over.
+    contacts_scores (list, float): None
+        Optional, approximate value for each residue pair that correlates with
+        the approximate computation time. Pairs are sorted onto processors to
+        make the time for each processor more equitable.
+    remove_high (float): None
+        If not None, remove decoy residue pairs with pairwise energy greater
+        than remove_high.
+    compute_all_neighbors (bool): False
+        If True, include all nearby residues when computing the pairwise
+        energy. Otherwise, include only the pair-interaction.
+    save_pairs
+    save_residues
+    use_compute_single_residue
+    use_mutational_control
+
+    Returns:
+    --------
+    None
+
+
+    """
+
+
     comm = MPI.COMM_WORLD
 
     rank = comm.Get_rank()
